@@ -1,3 +1,4 @@
+use crate::decoder::compute_normalization_gain_range;
 use crate::device_manager::DeviceManager;
 use crate::hotkeys::HotkeyManager;
 use crate::mixer::AudioMixer;
@@ -161,6 +162,7 @@ pub fn preview_sound(
     trim_start: f32,
     trim_end: f32,
     volume: f32,
+    seek_start: Option<f32>,
 ) -> Result<(), String> {
     let (sound, target_lufs) = {
         let guard = state.board_state.lock();
@@ -175,13 +177,21 @@ pub fn preview_sound(
 
     StateManager::ensure_sound_loaded(&sound, target_lufs, &state.mixer)?;
     let gain = state
-        .state_manager
-        .recompute_normalization(&sound, trim_start, trim_end, target_lufs, &state.mixer)
+        .mixer
+        .get_loaded_audio(&sound.id)
+        .map(|audio| {
+            compute_normalization_gain_range(&audio.samples, trim_start, trim_end, target_lufs)
+        })
         .unwrap_or(sound.normalized_gain);
+
+    let play_start = seek_start
+        .unwrap_or(trim_start)
+        .max(trim_start)
+        .min((trim_end - 0.01).max(trim_start));
 
     state
         .mixer
-        .trigger_preview(&sound.id, trim_start, trim_end, volume, gain);
+        .trigger_preview(&sound.id, play_start, trim_end, volume, gain);
     Ok(())
 }
 

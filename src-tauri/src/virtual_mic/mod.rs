@@ -56,6 +56,11 @@ impl VirtualMicManager {
             let snap = policy::snapshot_physical_defaults_before_attach();
             *self.snapshot.lock() = Some(snap.clone());
 
+            if !auto_switch_default_mic && (snap.active || policy::is_virtual_mic_currently_default())
+            {
+                let _ = policy::restore_original_mic();
+            }
+
             if !is_driver_ready() {
                 *self.last_error.lock() = Some(
                     "Built-in USB Audio virtual driver (usbip-win2) is not installed.".to_string(),
@@ -65,21 +70,32 @@ impl VirtualMicManager {
 
             let svc_state = query_service_state();
             let attached_ok = if svc_state != ServiceState::NotInstalled {
-                match start_installed_service() {
+                let try_svc = || match start_installed_service() {
                     Ok(()) => match ping_service_pipe("STATUS") {
-                        Ok(reply) if reply.contains("attached") => true,
-                        Ok(reply) => {
-                            *self.last_error.lock() = Some(format!("Virtual Mic service: {reply}"));
-                            false
-                        }
-                        Err(err) => {
-                            *self.last_error.lock() = Some(format!("Virtual Mic pipe error: {err}"));
-                            false
-                        }
+                        Ok(reply) if reply.trim() == "OK attached" => Ok(true),
+                        Ok(reply) => Err(format!("Virtual Mic service: {reply}")),
+                        Err(err) => Err(format!("Virtual Mic pipe error: {err}")),
                     },
-                    Err(err) => {
-                        *self.last_error.lock() = Some(format!("Failed to start Virtual Mic service: {err}"));
-                        false
+                    Err(err) => Err(format!("Failed to start Virtual Mic service: {err}")),
+                };
+
+                match try_svc() {
+                    Ok(v) => v,
+                    Err(first_err) => {
+                        // Self-heal if service stayed Running from a prior failed attach attempt
+                        if svc_state == ServiceState::Running {
+                            let _ = stop_installed_service();
+                            match try_svc() {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    *self.last_error.lock() = Some(err);
+                                    false
+                                }
+                            }
+                        } else {
+                            *self.last_error.lock() = Some(first_err);
+                            false
+                        }
                     }
                 }
             } else {
@@ -98,14 +114,18 @@ impl VirtualMicManager {
 
             if attached_ok {
                 *self.last_error.lock() = None;
-                // Wait up to ~4s for Windows usbaudio2.sys + AudioEndpointBuilder to register the endpoint
-                for _ in 0..40 {
+                // Wait up to ~8s for Windows usbaudio2.sys + AudioEndpointBuilder to register BOTH capture & render endpoints
+                for _ in 0..80 {
                     policy::guard_playback_defaults(&snap);
-                    let endpoints = policy::enumerate_active_endpoints(true).unwrap_or_default();
-                    if endpoints
+                    let cap_ready = policy::enumerate_active_endpoints(true)
+                        .unwrap_or_default()
                         .iter()
-                        .any(|e| e.friendly_name.to_lowercase().contains("memeboard virtual mic"))
-                    {
+                        .any(|e| e.friendly_name.to_lowercase().contains("memeboard virtual mic"));
+                    let ren_ready = policy::enumerate_active_endpoints(false)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|e| e.friendly_name.to_lowercase().contains("memeboard virtual mic"));
+                    if cap_ready && ren_ready {
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -188,10 +208,15 @@ impl VirtualMicManager {
         {
             let driver_installed = is_driver_ready();
             let service_installed = query_service_state() != ServiceState::NotInstalled;
-            let virtual_device_attached = policy::enumerate_active_endpoints(true)
+            let cap_attached = policy::enumerate_active_endpoints(true)
                 .unwrap_or_default()
                 .iter()
                 .any(|e| e.friendly_name.to_lowercase().contains("memeboard virtual mic"));
+            let ren_attached = policy::enumerate_active_endpoints(false)
+                .unwrap_or_default()
+                .iter()
+                .any(|e| e.friendly_name.to_lowercase().contains("memeboard virtual mic"));
+            let virtual_device_attached = cap_attached && ren_attached;
             let virtual_mic_is_default = policy::is_virtual_mic_currently_default();
             let saved_physical_mic = policy::saved_original_physical_mic_name();
             let err = self.last_error.lock().clone();
@@ -243,6 +268,18 @@ pub fn maybe_run_helper_mode() -> Option<i32> {
             } else {
                 1
             });
+        }
+        if args.iter().any(|a| a == "--restore-mic") {
+            return Some(if policy::restore_original_mic().is_ok() {
+                0
+            } else {
+                1
+            });
+        }
+        if args.iter().any(|a| a == "--prepare-uninstall") {
+            let _ = policy::restore_original_mic();
+            let _ = windows_svc::stop_installed_service();
+            return Some(0);
         }
         if args.iter().any(|a| a == "--attach-broker") {
             let get_arg = |flag: &str| -> Option<String> {

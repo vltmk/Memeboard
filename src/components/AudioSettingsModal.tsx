@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { AudioDevicesResult, AudioSettings, VirtualMicStatus } from '../types';
 import { api } from '../services/api';
+import { formatKeyboardCombo } from '../utils/hotkeys';
 
 interface AudioSettingsModalProps {
   isOpen: boolean;
@@ -29,39 +30,6 @@ interface AudioSettingsModalProps {
   onSetAutoSwitchMic: (enabled: boolean) => void;
   onRestoreOriginalMic: () => void;
   isInstallingDriver: boolean;
-}
-
-function formatHotkeyCombo(e: KeyboardEvent): string | null {
-  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push('Control');
-  if (e.shiftKey) parts.push('Shift');
-  if (e.altKey) parts.push('Alt');
-  if (e.metaKey) parts.push('Super');
-
-  let key = e.key;
-  if (e.code.startsWith('Numpad')) {
-    const sub = e.code.slice(6);
-    if (/^[0-9]$/.test(sub) || ['Add', 'Subtract', 'Multiply', 'Divide', 'Decimal', 'Enter'].includes(sub)) {
-      key = e.code;
-    }
-  } else if (e.code.startsWith('Digit')) {
-    key = e.code.slice(5);
-  } else if (e.code.startsWith('Key')) {
-    key = e.code.slice(3).toUpperCase();
-  } else if (key.startsWith('Arrow')) {
-    key = key.replace('Arrow', '');
-  } else if (key === ' ') {
-    key = 'Space';
-  } else if (key.length === 1) {
-    key = key.toUpperCase();
-  }
-
-  parts.push(key);
-  return parts.join('+');
 }
 
 export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
@@ -113,7 +81,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
         return;
       }
 
-      const combo = formatHotkeyCombo(e);
+      const combo = formatKeyboardCombo(e);
       if (!combo) return;
 
       if (recordingField === 'panic') {

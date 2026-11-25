@@ -104,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Center: Live Dual Mix Controls (Monitor Headphones + Virtual Mic Output) */}
-      <div className="hidden lg:flex items-center gap-3 bg-[#232428] px-3 py-1.5 rounded-xl border border-[#35373c]/60">
+      <div className="hidden md:flex items-center gap-3 bg-[#232428] px-3 py-1.5 rounded-xl border border-[#35373c]/60">
         {/* Local Headphones Monitor */}
         <div className="flex items-center gap-2 pr-3 border-r border-[#35373c]">
           <button
@@ -123,7 +123,7 @@ export const Header: React.FC<HeaderProps> = ({
               <Volume2 className="w-4 h-4" />
             )}
           </button>
-          <div className="flex flex-col w-24">
+          <div className="flex flex-col w-20 xl:w-24">
             <div className="flex justify-between text-[10px] font-medium text-[#949ba4]">
               <span>Headphones</span>
               <span>{settings.monitorMuted ? 'MUTED' : `${Math.round(settings.monitorVolume * 100)}%`}</span>
@@ -158,7 +158,7 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Mic className="w-4 h-4" />
           </button>
-          <div className="flex flex-col w-24">
+          <div className="flex flex-col w-20 xl:w-24">
             <div className="flex justify-between text-[10px] font-medium text-[#949ba4]">
               <span>Mic SFX Mix</span>
               <span>

@@ -58,6 +58,11 @@ fn show_main_window(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    let Some(_single_instance) = hotkeys::acquire_single_instance_or_activate() else {
+        return;
+    };
+
     let state_manager = Arc::new(StateManager::new().expect("Failed to initialize Memeboard storage"));
     let initial_state = state_manager.load_state().unwrap_or_else(|e| {
         eprintln!("[Memeboard] State load fallback ({e})");
@@ -133,6 +138,9 @@ pub fn run() {
                             } else {
                                 let _ = hotkey_app.emit("sound-triggered", &sound_id);
                             }
+                        }
+                        HotkeyAction::ShowMainWindow => {
+                            show_main_window(&hotkey_app);
                         }
                     }
                 });

@@ -366,14 +366,15 @@ impl StreamProcessor {
         let frames_count = broadcast_out.len() / CHANNELS;
         broadcast_out.fill(0.0);
 
-        // 1. Voice activity detection with hysteresis + 250ms hold
+        // 1. Voice activity detection with hysteresis + 250ms hold (scaled by mic pass-through level)
+        let mic_gain = self.controls.mic_volume();
         let mic_available = !mic_input.is_empty();
-        let mic_rms = if mic_available {
+        let mic_rms = if mic_available && mic_gain > 0.001 {
             let mut sum_sq = 0.0f32;
             for &s in mic_input {
                 sum_sq += s * s;
             }
-            (sum_sq / mic_input.len() as f32).sqrt()
+            (sum_sq / mic_input.len() as f32).sqrt() * mic_gain
         } else {
             0.0
         };
@@ -408,7 +409,6 @@ impl StreamProcessor {
         let alpha_attack = 1.0 - (-1.0 / (0.015 * SAMPLE_RATE as f32)).exp();
         let alpha_release = 1.0 - (-1.0 / (0.300 * SAMPLE_RATE as f32)).exp();
 
-        let mic_gain = self.controls.mic_volume();
         let bcast_gain = if self.controls.broadcast_muted() {
             0.0
         } else {
@@ -573,8 +573,19 @@ impl AudioMixer {
             let slot_id = if let Some(existing) = reg.get(&sound_id) {
                 existing.slot_id
             } else {
-                let id = self.next_slot_id.fetch_add(1, Ordering::Relaxed);
-                id % MAX_SOUND_SLOTS
+                let used: std::collections::HashSet<usize> =
+                    reg.values().map(|v| v.slot_id).collect();
+                let mut chosen = None;
+                for _ in 0..MAX_SOUND_SLOTS {
+                    let candidate = self.next_slot_id.fetch_add(1, Ordering::Relaxed) % MAX_SOUND_SLOTS;
+                    if !used.contains(&candidate) {
+                        chosen = Some(candidate);
+                        break;
+                    }
+                }
+                chosen.unwrap_or_else(|| {
+                    self.next_slot_id.fetch_add(1, Ordering::Relaxed) % MAX_SOUND_SLOTS
+                })
             };
             reg.insert(
                 sound_id.clone(),
@@ -748,7 +759,7 @@ impl AudioMixer {
 
     /// Creates an exclusively owned lock-free Broadcast StreamProcessor and wires its SPSC producer.
     pub fn create_broadcast_processor(&self) -> StreamProcessor {
-        let rb = HeapRb::<StreamCmd>::new(512);
+        let rb = HeapRb::<StreamCmd>::new(2048);
         let (tx, rx) = rb.split();
         *self.bcast_tx.lock() = Some(tx);
         self.controls.bcast_active_count.store(0, Ordering::Relaxed);
@@ -765,7 +776,7 @@ impl AudioMixer {
 
     /// Creates an exclusively owned lock-free Monitor StreamProcessor and wires its SPSC producer.
     pub fn create_monitor_processor(&self) -> StreamProcessor {
-        let rb = HeapRb::<StreamCmd>::new(512);
+        let rb = HeapRb::<StreamCmd>::new(2048);
         let (tx, rx) = rb.split();
         *self.mon_tx.lock() = Some(tx);
         self.controls.mon_active_count.store(0, Ordering::Relaxed);

@@ -3,17 +3,24 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Input::{
     GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
     RIDEV_INPUTSINK, RIM_TYPEKEYBOARD,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE,
-    MSG, PostMessageW, RegisterClassW, TranslateMessage, WM_INPUT, WM_QUIT, WNDCLASSW,
+    ASFW_ANY, AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, FindWindowExW, GetMessageW, HWND_MESSAGE, MSG, PostMessageW, RegisterClassW,
+    TranslateMessage, WM_APP, WM_INPUT, WM_QUIT, WNDCLASSW,
 };
+
+pub const HOTKEY_WINDOW_CLASS: &str = "MemeboardRawInputHotkeyWindow";
+pub const WM_SHOW_MAIN_WINDOW: u32 = WM_APP + 42;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotkeyCombo {
@@ -29,6 +36,7 @@ pub enum HotkeyAction {
     Panic,
     ToggleOverlay,
     TriggerSound(String),
+    ShowMainWindow,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +83,30 @@ impl KeyboardState {
 
     fn super_key(&self) -> bool {
         self.win_left || self.win_right
+    }
+
+    fn sync_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool, lwin: bool, rwin: bool) {
+        if !ctrl {
+            self.ctrl_left = false;
+            self.ctrl_right = false;
+            self.ctrl_generic = false;
+        }
+        if !shift {
+            self.shift_left = false;
+            self.shift_right = false;
+            self.shift_generic = false;
+        }
+        if !alt {
+            self.alt_left = false;
+            self.alt_right = false;
+            self.alt_generic = false;
+        }
+        if !lwin {
+            self.win_left = false;
+        }
+        if !rwin {
+            self.win_right = false;
+        }
     }
 
     /// Processes one Raw Input keyboard event and returns Some(HotkeyCombo) only on initial
@@ -167,7 +199,19 @@ pub fn parse_hotkey(spec: &str) -> Option<HotkeyCombo> {
     let mut super_key = false;
     let mut primary_vk: Option<u16> = None;
 
-    for raw_part in trimmed.split('+') {
+    // Handle literal trailing '+' key (e.g. "+" or "Control+Shift++")
+    let (body, trailing_plus) = if trimmed == "+" {
+        ("", true)
+    } else if let Some(prefix) = trimmed.strip_suffix("++") {
+        (prefix, true)
+    } else {
+        (trimmed, false)
+    };
+    if trailing_plus {
+        primary_vk = Some(VK_OEM_PLUS);
+    }
+
+    for raw_part in body.split('+') {
         let part = raw_part.trim();
         if part.is_empty() {
             continue;
@@ -406,6 +450,15 @@ unsafe extern "system" fn raw_input_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_SHOW_MAIN_WINDOW {
+        LOOP_CTX.with(|cell| {
+            if let Some(ctx) = cell.borrow().as_ref() {
+                let _ = ctx.action_tx.send(HotkeyAction::ShowMainWindow);
+            }
+        });
+        return 0;
+    }
+
     if msg == WM_INPUT {
         unsafe {
             let mut size: u32 = 0;
@@ -432,8 +485,19 @@ unsafe extern "system" fn raw_input_wnd_proc(
                         let kb = raw.data.keyboard;
                         let is_break = (kb.Flags as u32 & 0x0001) != 0; // RI_KEY_BREAK
                         let is_e0 = (kb.Flags as u32 & 0x0002) != 0; // RI_KEY_E0
+                        let is_down = |vk: u16| (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
                         LOOP_CTX.with(|cell| {
                             if let Some(ctx) = cell.borrow_mut().as_mut() {
+                                if !is_break && !is_modifier_vkey(resolve_vkey(kb.VKey, kb.MakeCode, is_e0)) {
+                                    // Recover from missed key-up events across Win+L / UAC secure desktop
+                                    ctx.kb_state.sync_modifiers(
+                                        is_down(VK_CONTROL),
+                                        is_down(VK_SHIFT),
+                                        is_down(VK_MENU),
+                                        is_down(VK_LWIN),
+                                        is_down(VK_RWIN),
+                                    );
+                                }
                                 if let Some(combo) =
                                     ctx.kb_state
                                         .process_event(kb.VKey, kb.MakeCode, is_break, is_e0)
@@ -459,6 +523,51 @@ unsafe extern "system" fn raw_input_wnd_proc(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+pub struct SingleInstanceGuard(HANDLE);
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+/// Acquires single-instance GUI lock; if another Memeboard instance is already running
+/// (including minimized to System Tray), activates its main window and returns `None`.
+pub fn acquire_single_instance_or_activate() -> Option<SingleInstanceGuard> {
+    let mutex_name = wide("Local\\MemeboardGuiSingleInstance_v1");
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
+        if handle.is_null() {
+            // Unexpected OS failure: allow startup rather than blocking the app
+            return Some(SingleInstanceGuard(std::ptr::null_mut()));
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(handle);
+            let class_name = wide(HOTKEY_WINDOW_CLASS);
+            for _ in 0..10 {
+                let hwnd = FindWindowExW(
+                    HWND_MESSAGE,
+                    std::ptr::null_mut(),
+                    class_name.as_ptr(),
+                    std::ptr::null(),
+                );
+                if !hwnd.is_null() {
+                    let _ = AllowSetForegroundWindow(ASFW_ANY);
+                    let _ = PostMessageW(hwnd, WM_SHOW_MAIN_WINDOW, 0, 0);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+            return None;
+        }
+        Some(SingleInstanceGuard(handle))
+    }
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -480,7 +589,7 @@ fn run_raw_input_loop(
 
     unsafe {
         let hinstance = GetModuleHandleW(std::ptr::null());
-        let class_name = wide("MemeboardRawInputHotkeyWindow");
+        let class_name = wide(HOTKEY_WINDOW_CLASS);
         let wc = WNDCLASSW {
             style: 0,
             lpfnWndProc: Some(raw_input_wnd_proc),
@@ -597,6 +706,26 @@ mod tests {
         );
         assert!(parse_hotkey("").is_none());
         assert!(parse_hotkey("InvalidKeyName123").is_none());
+        assert_eq!(
+            parse_hotkey("Control+Shift+Equal"),
+            Some(HotkeyCombo {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                super_key: false,
+                vkey: VK_OEM_PLUS,
+            })
+        );
+        assert_eq!(
+            parse_hotkey("Control++"),
+            Some(HotkeyCombo {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                super_key: false,
+                vkey: VK_OEM_PLUS,
+            })
+        );
     }
 
     #[test]
@@ -625,6 +754,28 @@ mod tests {
         kb.process_event(b'X' as u16, 0x2D, true, false);
         kb.process_event(0x10, 0x2A, true, false);
         kb.process_event(0x11, 0x1D, true, false);
+        assert_eq!(
+            kb.process_event(b'X' as u16, 0x2D, false, false),
+            Some(HotkeyCombo {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                super_key: false,
+                vkey: b'X' as u16,
+            })
+        );
+    }
+
+    #[test]
+    fn keyboard_state_sync_modifiers_recovers_after_lock_screen() {
+        let mut kb = KeyboardState::new();
+        // Simulate Win key pressed before Win+L (release never received across lock screen)
+        assert!(kb.process_event(VK_LWIN, 0x5B, false, true).is_none());
+        assert!(kb.super_key());
+
+        // User unlocks and presses X; OS reports Win key is no longer held
+        kb.sync_modifiers(false, false, false, false, false);
+        assert!(!kb.super_key());
         assert_eq!(
             kb.process_event(b'X' as u16, 0x2D, false, false),
             Some(HotkeyCombo {

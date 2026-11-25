@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { SoundItem, PlaybackMode } from '../types';
 import { drawWaveform } from '../utils/audio';
+import { formatKeyboardCombo } from '../utils/hotkeys';
 import { api } from '../services/api';
 
 interface SoundEditorModalProps {
@@ -31,39 +32,6 @@ const EMOJI_PRESETS = [
 
 const CATEGORY_PRESETS = ['General', 'Memes', 'Gaming', 'Reactions', 'Music', 'Voice'];
 const MIN_TRIM_GAP = 0.05;
-
-function formatKeyboardCombo(e: KeyboardEvent): string | null {
-  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push('Control');
-  if (e.shiftKey) parts.push('Shift');
-  if (e.altKey) parts.push('Alt');
-  if (e.metaKey) parts.push('Super');
-
-  let key = e.key;
-  if (e.code.startsWith('Numpad')) {
-    const sub = e.code.slice(6);
-    if (/^[0-9]$/.test(sub) || ['Add', 'Subtract', 'Multiply', 'Divide', 'Decimal', 'Enter'].includes(sub)) {
-      key = e.code;
-    }
-  } else if (e.code.startsWith('Digit')) {
-    key = e.code.slice(5);
-  } else if (e.code.startsWith('Key')) {
-    key = e.code.slice(3).toUpperCase();
-  } else if (key.startsWith('Arrow')) {
-    key = key.replace('Arrow', '');
-  } else if (key === ' ') {
-    key = 'Space';
-  } else if (key.length === 1) {
-    key = key.toUpperCase();
-  }
-
-  parts.push(key);
-  return parts.join('+');
-}
 
 export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
   sound,
@@ -89,6 +57,8 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
   const playOffsetRef = useRef<number>(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const draggingHandleRef = useRef<'start' | 'end' | null>(null);
+  const drawParamsRef = useRef({ trimStart: 0, trimEnd: 1, previewTime: 0 });
+  drawParamsRef.current = { trimStart, trimEnd, previewTime };
 
   const allCategories = Array.from(new Set([...CATEGORY_PRESETS, ...existingCategories])).filter(Boolean);
 
@@ -108,7 +78,7 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
     }
   }, [sound]);
 
-  // Size canvas cleanly with ResizeObserver instead of reallocating on every animation frame
+  // Size canvas cleanly with ResizeObserver ONLY when modal/sound opens (zero 60fps reallocations)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !sound) return;
@@ -123,7 +93,8 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
           canvas.width = targetW;
           canvas.height = targetH;
         }
-        drawWaveform(canvas, sound.peaks, trimStart, trimEnd, sound.duration, previewTime);
+        const { trimStart: ts, trimEnd: te, previewTime: pt } = drawParamsRef.current;
+        drawWaveform(canvas, sound.peaks, ts, te, sound.duration, pt);
       }
     };
 
@@ -131,7 +102,7 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
     return () => ro.disconnect();
-  }, [sound, trimStart, trimEnd, previewTime]);
+  }, [sound]);
 
   useEffect(() => {
     if (canvasRef.current && sound) {
@@ -164,7 +135,7 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
       playOffsetRef.current = startAt;
       startTimeRef.current = performance.now();
 
-      api.previewSound(sound.id, startAt, trimEnd, volume).catch(() => {});
+      api.previewSound(sound.id, trimStart, trimEnd, volume, startAt).catch(() => {});
 
       const loop = (now: number) => {
         const elapsed = (now - startTimeRef.current) / 1000;

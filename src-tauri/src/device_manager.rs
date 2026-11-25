@@ -15,11 +15,9 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 
 const MIC_RING_FRAMES: usize = 4096;
-const MIC_PREFILL_FRAMES: usize = 320; // ~6.7 ms at 48 kHz
-const MIC_DRIFT_HIGH_FRAMES: usize = 720; // 15 ms
-const MIC_DRIFT_LOW_FRAMES: usize = 160; // 3.3 ms
-const MIC_HARD_TRIM_LIMIT: usize = 2048; // ~42.7 ms safety ceiling
-const MIC_TRIM_TARGET_FRAMES: usize = 480; // 10 ms
+const MIC_CUSHION_FRAMES: usize = 480; // 10 ms jitter cushion at 48 kHz
+const MIC_DRIFT_HIGH_OFFSET: usize = 960; // +20 ms above callback window
+const MIC_DRIFT_LOW_OFFSET: usize = 160; // ~3.3 ms cushion floor before slow-down
 const RESAMPLE_CHUNK: usize = 128;
 
 thread_local! {
@@ -235,16 +233,22 @@ impl MicConsumerState {
     }
 
     /// Reads `needed_frames` 48 kHz stereo frames into `self.resampled_interleaved`, applying
-    /// startup prefill and imperceptible ±0.2% clock-drift compensation without clicks or L/R swap.
+    /// callback-aware prefill (~10 ms jitter cushion) and ±0.2% clock-drift lock without clicks.
     fn fill_mic_frames(&mut self, needed_frames: usize, mic_stream_active: bool) -> &[f32] {
         self.resampled_interleaved.clear();
         if !mic_stream_active || needed_frames == 0 {
+            self.primed = false;
             return &[];
         }
 
-        let avail = self.cons.occupied_len();
+        let prefill_target = (needed_frames + MIC_CUSHION_FRAMES).clamp(640, MIC_RING_FRAMES / 2);
+        let drift_high = (needed_frames + MIC_DRIFT_HIGH_OFFSET).min(MIC_RING_FRAMES - 256);
+        let drift_low = needed_frames + MIC_DRIFT_LOW_OFFSET;
+        let hard_trim_limit = (needed_frames + 2048).min(MIC_RING_FRAMES - 128);
+
+        let mut avail = self.cons.occupied_len();
         if !self.primed {
-            if avail < MIC_PREFILL_FRAMES {
+            if avail < prefill_target {
                 return &[];
             }
             self.primed = true;
@@ -256,11 +260,10 @@ impl MicConsumerState {
         }
 
         // Emergency hard trim if buffer grew far beyond latency bounds (e.g., OS sleep/resume)
-        let mut avail = avail;
-        if avail > MIC_HARD_TRIM_LIMIT {
+        if avail > hard_trim_limit {
             let mut discard = [[0.0f32; 2]; 64];
-            while avail > MIC_TRIM_TARGET_FRAMES {
-                let n = (avail - MIC_TRIM_TARGET_FRAMES).min(discard.len());
+            while avail > prefill_target {
+                let n = (avail - prefill_target).min(discard.len());
                 let popped = self.cons.pop_slice(&mut discard[..n]);
                 if popped == 0 {
                     break;
@@ -270,10 +273,9 @@ impl MicConsumerState {
         }
 
         let avail = self.cons.occupied_len();
-        let take_frames = if avail > MIC_DRIFT_HIGH_FRAMES && avail >= needed_frames + 1 {
+        let take_frames = if avail > drift_high && avail >= needed_frames + 1 {
             needed_frames + 1
-        } else if avail < MIC_DRIFT_LOW_FRAMES && needed_frames >= 16 && avail >= needed_frames - 1
-        {
+        } else if avail < drift_low && needed_frames >= 16 && avail >= needed_frames - 1 {
             needed_frames - 1
         } else {
             needed_frames.min(avail)
@@ -296,30 +298,44 @@ impl MicConsumerState {
                 self.resampled_interleaved.push(f[0]);
                 self.resampled_interleaved.push(f[1]);
             }
-        } else if actually_read >= 2 && needed_frames > 0 {
-            // Smooth linear stretch/compress over the callback window for clock-drift lock
+        } else if (actually_read == needed_frames + 1 || actually_read + 1 == needed_frames)
+            && actually_read >= 2
+            && needed_frames >= 2
+        {
+            // Smooth ±1-frame linear stretch/compress over the callback window for clock-drift lock
             let last = actually_read - 1;
             for out_idx in 0..needed_frames {
-                let src_pos = (out_idx as f64) * (last as f64) / ((needed_frames.max(2) - 1) as f64);
+                let src_pos =
+                    (out_idx as f64) * (last as f64) / ((needed_frames - 1) as f64);
                 let idx0 = (src_pos.floor() as usize).min(last);
                 let idx1 = (idx0 + 1).min(last);
                 let frac = (src_pos - idx0 as f64) as f32;
-                let l = self.raw_scratch[idx0][0] * (1.0 - frac)
-                    + self.raw_scratch[idx1][0] * frac;
-                let r = self.raw_scratch[idx0][1] * (1.0 - frac)
-                    + self.raw_scratch[idx1][1] * frac;
+                let l =
+                    self.raw_scratch[idx0][0] * (1.0 - frac) + self.raw_scratch[idx1][0] * frac;
+                let r =
+                    self.raw_scratch[idx0][1] * (1.0 - frac) + self.raw_scratch[idx1][1] * frac;
                 self.resampled_interleaved.push(l);
                 self.resampled_interleaved.push(r);
             }
         } else {
-            for f in &self.raw_scratch[..actually_read] {
-                self.resampled_interleaved.push(f[0]);
-                self.resampled_interleaved.push(f[1]);
+            // Genuine underrun: ramp down gracefully to avoid step click, then re-prime
+            let fade_len = actually_read.min(16);
+            let fade_start = actually_read - fade_len;
+            for (i, f) in self.raw_scratch[..actually_read].iter().enumerate() {
+                let gain = if i >= fade_start && fade_len > 0 {
+                    let rem = actually_read - 1 - i;
+                    rem as f32 / fade_len as f32
+                } else {
+                    1.0
+                };
+                self.resampled_interleaved.push(f[0] * gain);
+                self.resampled_interleaved.push(f[1] * gain);
             }
             while self.resampled_interleaved.len() < needed_frames * CHANNELS {
                 self.resampled_interleaved.push(0.0);
                 self.resampled_interleaved.push(0.0);
             }
+            self.primed = false;
         }
 
         &self.resampled_interleaved
@@ -644,8 +660,19 @@ impl DeviceManager {
             .filter_map(|d| d.name().ok())
             .collect();
 
+        let is_loop_endpoint = |n: &str| {
+            let lower = n.to_lowercase();
+            lower.contains("memeboard virtual mic") || lower.contains("cable output")
+        };
+        let is_mixer_or_virtual = |n: &str| {
+            let lower = n.to_lowercase();
+            is_virtual_endpoint(n)
+                || lower.contains("sonic studio virtual mixer")
+                || lower.contains("stereo mix")
+        };
+
         if let Some(target) = requested_id {
-            if !is_virtual_endpoint(target) && names.iter().any(|n| n == target) {
+            if !is_loop_endpoint(target) && names.iter().any(|n| n == target) {
                 if let Some(dev) = Self::find_input_by_name(host, target) {
                     return Some(dev);
                 }
@@ -670,11 +697,8 @@ impl DeviceManager {
             }
         }
 
-        // Otherwise pick first non-virtual microphone (preferring non-"Stereo Mix")
-        if let Some(name) = names
-            .iter()
-            .find(|n| !is_virtual_endpoint(n) && !n.to_lowercase().contains("stereo mix"))
-        {
+        // Otherwise pick first genuine physical microphone (skipping virtual cables, Nahimic, Stereo Mix)
+        if let Some(name) = names.iter().find(|n| !is_mixer_or_virtual(n)) {
             return Self::find_input_by_name(host, name);
         }
 
@@ -1065,7 +1089,9 @@ impl BroadcastOutputEngine {
         }
 
         if let Some(resampler) = &mut self.resampler {
-            while resampler.available_frames() < out_frames {
+            let mut iters = 0usize;
+            while resampler.available_frames() < out_frames && iters < 128 {
+                iters += 1;
                 let mic_slice = self
                     .mic
                     .fill_mic_frames(RESAMPLE_CHUNK, self.mic_stream_active);
@@ -1115,7 +1141,9 @@ impl MonitorOutputEngine {
         }
 
         if let Some(resampler) = &mut self.resampler {
-            while resampler.available_frames() < out_frames {
+            let mut iters = 0usize;
+            while resampler.available_frames() < out_frames && iters < 128 {
+                iters += 1;
                 let out_slice = &mut self.scratch_48k[..RESAMPLE_CHUNK * CHANNELS];
                 self.processor.process_monitor(out_slice);
                 resampler.push_interleaved(out_slice);
@@ -1167,5 +1195,84 @@ fn write_stereo_to_device<T: Copy>(
         for c in 2..out_channels {
             data[base + c] = zero;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mic_consumer_survives_wasapi_480_frame_jitter_without_dropout() {
+        let rb = HeapRb::<[f32; 2]>::new(MIC_RING_FRAMES);
+        let (mut prod, cons) = rb.split();
+        let mut mic = MicConsumerState::new(cons);
+
+        // First 480-frame push shouldn't prime yet (needs jitter cushion above 480)
+        for i in 0..480 {
+            prod.try_push([i as f32 * 0.001, -(i as f32) * 0.001]).unwrap();
+        }
+        assert!(mic.fill_mic_frames(480, true).is_empty());
+
+        // Second 480-frame push reaches 960 -> primes with 480 frames of cushion remaining
+        for i in 480..960 {
+            prod.try_push([i as f32 * 0.001, -(i as f32) * 0.001]).unwrap();
+        }
+        let first = mic.fill_mic_frames(480, true);
+        assert_eq!(first.len(), 480 * 2);
+        assert!((first[0] - 0.0).abs() < 1e-6);
+        assert!((first[1] - 0.0).abs() < 1e-6);
+
+        // Simulate broadcast firing BEFORE the next mic callback arrives (480 frames still buffered!)
+        let jittered = mic.fill_mic_frames(480, true);
+        assert_eq!(jittered.len(), 480 * 2);
+        assert!((jittered[0] - 0.480).abs() < 1e-5);
+        assert!((jittered[1] - (-0.480)).abs() < 1e-5);
+        assert!(mic.primed, "Should remain primed across 10ms callback jitter");
+    }
+
+    #[test]
+    fn mic_consumer_underrun_fades_and_reprimes_cleanly() {
+        let rb = HeapRb::<[f32; 2]>::new(MIC_RING_FRAMES);
+        let (mut prod, cons) = rb.split();
+        let mut mic = MicConsumerState::new(cons);
+
+        for _ in 0..960 {
+            prod.try_push([0.5, -0.5]).unwrap();
+        }
+        assert_eq!(mic.fill_mic_frames(480, true).len(), 480 * 2);
+        assert_eq!(mic.fill_mic_frames(480, true).len(), 480 * 2);
+
+        // Push only 100 frames (< 480) -> genuine underrun should fade tail to 0 and unprime
+        for _ in 0..100 {
+            prod.try_push([0.5, -0.5]).unwrap();
+        }
+        let underrun = mic.fill_mic_frames(480, true);
+        assert_eq!(underrun.len(), 480 * 2);
+        assert!((underrun[0] - 0.5).abs() < 1e-6);
+        assert_eq!(underrun[underrun.len() - 1], 0.0);
+        assert!(!mic.primed);
+    }
+
+    #[test]
+    fn streaming_resampler_44100_to_48000_outputs_frames() {
+        let mut rs = StreamingResampler::new(44_100, 48_000).unwrap();
+        for i in 0..2048 {
+            let s = (i as f32 * 0.05).sin() * 0.5;
+            rs.push_frame(s, -s);
+        }
+        assert!(rs.available_frames() > 2000);
+        let frame = rs.pop_frame().unwrap();
+        assert!((frame[0] + frame[1]).abs() < 1e-4, "L/R mirror preserved");
+    }
+
+    #[test]
+    fn virtual_endpoint_ignores_nahimic_and_detects_memeboard() {
+        assert!(!is_virtual_endpoint("Speakers (Sonic Studio Virtual Mixer)"));
+        assert!(!is_virtual_endpoint("Microphone (4- MMX 150)"));
+        assert!(is_virtual_endpoint("Microphone (Memeboard Virtual Mic)"));
+        assert!(is_virtual_endpoint("CABLE Input (VB-Audio Virtual Cable)"));
+        assert_eq!(broadcast_virtual_priority("Speakers (Sonic Studio Virtual Mixer)"), None);
+        assert_eq!(broadcast_virtual_priority("Speakers (Memeboard Virtual Mic)"), Some(100));
     }
 }

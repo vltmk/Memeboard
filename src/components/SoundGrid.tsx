@@ -16,6 +16,7 @@ interface SoundGridProps {
   playingIds: string[];
   isDraggingFile: boolean;
   virtualMicStatus: VirtualMicStatus | null;
+  broadcastStreamActive: boolean;
   onPlaySound: (id: string) => void;
   onStopSound: (id: string) => void;
   onEditSound: (sound: SoundItem) => void;
@@ -30,6 +31,7 @@ export const SoundGrid: React.FC<SoundGridProps> = ({
   playingIds,
   isDraggingFile,
   virtualMicStatus,
+  broadcastStreamActive,
   onPlaySound,
   onStopSound,
   onEditSound,
@@ -68,6 +70,7 @@ export const SoundGrid: React.FC<SoundGridProps> = ({
   }, [sounds, searchQuery, activeCategory]);
 
   const showDriverBanner =
+    !broadcastStreamActive &&
     virtualMicStatus &&
     (!virtualMicStatus.driverInstalled || !virtualMicStatus.virtualDeviceAttached);
 

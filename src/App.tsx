@@ -152,21 +152,48 @@ const MainApp: React.FC = () => {
     };
   }, []);
 
-  // Poll live playback & stream health every 140ms
+  // Poll live playback & stream health every 140ms ONLY while main window is visible (not hidden in tray)
   useEffect(() => {
     if (!isTauriEnvironment()) return;
-    const interval = setInterval(async () => {
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const poll = async () => {
       try {
         const status = await api.getPlaybackStatus();
         setPlaybackStatus(status);
       } catch {
         // ignore
       }
-    }, 140);
-    return () => clearInterval(interval);
+    };
+
+    const syncPolling = () => {
+      if (document.hidden) {
+        if (interval) {
+          clearInterval(interval);
+          interval = null;
+        }
+      } else {
+        poll();
+        if (!interval) {
+          interval = setInterval(poll, 140);
+        }
+      }
+    };
+
+    syncPolling();
+    document.addEventListener('visibilitychange', syncPolling);
+    return () => {
+      document.removeEventListener('visibilitychange', syncPolling);
+      if (interval) clearInterval(interval);
+    };
   }, []);
 
   const persistState = useCallback(async (nextState: SoundboardState) => {
+    if (volumeSaveTimerRef.current) {
+      clearTimeout(volumeSaveTimerRef.current);
+      volumeSaveTimerRef.current = null;
+    }
+    boardStateRef.current = nextState;
     setBoardState(nextState);
     if (!isTauriEnvironment()) return;
     try {
@@ -302,11 +329,23 @@ const MainApp: React.FC = () => {
       settings: newSettings,
     });
     await refreshDevicesAndVirtualMic();
+    try {
+      const status = await api.getPlaybackStatus();
+      setPlaybackStatus(status);
+      if (devicesChanged && status.lastAudioError) {
+        showToast(`Audio warning: ${status.lastAudioError}`);
+        return;
+      }
+    } catch {
+      // ignore
+    }
     showToast('Audio & hotkey settings applied');
   };
 
   const scheduleHeaderSettingsSave = (nextSettings: AudioSettings) => {
-    setBoardState((prev) => ({ ...prev, settings: nextSettings }));
+    const updated = { ...boardStateRef.current, settings: nextSettings };
+    boardStateRef.current = updated;
+    setBoardState(updated);
     api
       .setVolumes(
         nextSettings.micVolume,
@@ -321,10 +360,8 @@ const MainApp: React.FC = () => {
       clearTimeout(volumeSaveTimerRef.current);
     }
     volumeSaveTimerRef.current = setTimeout(() => {
-      api.saveSoundboardState({
-        ...boardStateRef.current,
-        settings: nextSettings,
-      }).catch(() => {});
+      volumeSaveTimerRef.current = null;
+      api.saveSoundboardState(boardStateRef.current).catch(() => {});
     }, 250);
   };
 
@@ -414,6 +451,7 @@ const MainApp: React.FC = () => {
         playingIds={playbackStatus.playingSoundIds}
         isDraggingFile={isDraggingFile}
         virtualMicStatus={virtualMicStatus}
+        broadcastStreamActive={playbackStatus.broadcastStreamActive}
         onPlaySound={(id) => api.playSound(id).catch((e) => showToast(`${e}`))}
         onStopSound={(id) => api.stopSound(id).catch(() => {})}
         onEditSound={(sound) => setEditingSound(sound)}

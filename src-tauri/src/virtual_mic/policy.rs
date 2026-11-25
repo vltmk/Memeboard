@@ -370,16 +370,34 @@ pub fn snapshot_physical_defaults_before_attach() -> MicRestoreState {
 /// Ensures Windows did not accidentally switch the user's speakers/headphones
 /// to our virtual device when the UAC2 endpoint arrived.
 pub fn guard_playback_defaults(snapshot: &MicRestoreState) {
+    let fallback_render = || {
+        enumerate_active_endpoints(false)
+            .ok()
+            .and_then(|eps| {
+                eps.into_iter()
+                    .find(|e| !is_virtual_audio_name(&e.friendly_name))
+                    .map(|e| e.id)
+            })
+    };
+
     if let Some(cur) = get_default_endpoint(false, false) {
         if is_virtual_audio_name(&cur.friendly_name) {
-            if let Some(orig) = snapshot.original_render_console_id.as_deref() {
+            let target = snapshot
+                .original_render_console_id
+                .clone()
+                .or_else(fallback_render);
+            if let Some(orig) = target.as_deref() {
                 let _ = win_policy::set_default_console_and_comms(Some(orig), None);
             }
         }
     }
     if let Some(cur) = get_default_endpoint(false, true) {
         if is_virtual_audio_name(&cur.friendly_name) {
-            if let Some(orig) = snapshot.original_render_comms_id.as_deref() {
+            let target = snapshot
+                .original_render_comms_id
+                .clone()
+                .or_else(fallback_render);
+            if let Some(orig) = target.as_deref() {
                 let _ = win_policy::set_default_console_and_comms(None, Some(orig));
             }
         }
@@ -416,6 +434,10 @@ pub fn switch_default_mic_to_virtual(snapshot: &MicRestoreState) -> Result<Strin
 pub fn restore_original_mic() -> Result<(), String> {
     let path = restore_file_path();
     let mut state = load_restore_state(&path).unwrap_or_default();
+
+    if !state.active && !is_virtual_mic_currently_default() {
+        return Ok(());
+    }
 
     let capture_endpoints = enumerate_active_endpoints(true).unwrap_or_default();
     let exists = |id: &str| capture_endpoints.iter().any(|e| e.id == id);

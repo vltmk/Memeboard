@@ -88,6 +88,41 @@ export function drawWaveform(
     ctx.fill();
   }
 
+  // Draw visible trim boundary handles (start & end) so users can always locate and drag them
+  const clampedStart = Math.max(0, Math.min(trimStart, effectiveDuration));
+  const clampedEnd = Math.max(clampedStart, Math.min(trimEnd, effectiveDuration));
+  const startX = Math.max(2, Math.min((clampedStart / effectiveDuration) * width, width - 2));
+  const endX = Math.max(2, Math.min((clampedEnd / effectiveDuration) * width, width - 2));
+
+  // Subtle highlight tint inside active trimmed window
+  if (endX > startX) {
+    ctx.fillStyle = 'rgba(88, 101, 242, 0.08)';
+    ctx.fillRect(startX, 0, endX - startX, height);
+  }
+
+  const startHandleColor = options?.trimHandleColor || '#23a55a';
+  const endHandleColor = options?.trimHandleColor || '#f0b232';
+
+  const drawHandle = (x: number, color: string, alignLeft: boolean) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    const pillW = 8;
+    const pillH = 14;
+    const pillX = alignLeft ? x - 1 : x - pillW + 1;
+    ctx.beginPath();
+    ctx.roundRect(pillX, 2, pillW, pillH, 3);
+    ctx.fill();
+  };
+
+  drawHandle(startX, startHandleColor, true);
+  drawHandle(endX, endHandleColor, false);
+
   // Draw playhead if within bounds
   if (currentTime >= 0 && currentTime <= effectiveDuration) {
     const playheadX = (currentTime / effectiveDuration) * width;

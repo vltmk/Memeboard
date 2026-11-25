@@ -40,13 +40,15 @@ export const api = {
     soundId: string,
     trimStart: number,
     trimEnd: number,
-    volume: number
+    volume: number,
+    seekStart?: number
   ): Promise<void> {
     return await invoke('preview_sound', {
       soundId,
       trimStart,
       trimEnd,
       volume,
+      seekStart: seekStart ?? null,
     });
   },
 
