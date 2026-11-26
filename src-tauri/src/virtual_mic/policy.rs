@@ -28,6 +28,7 @@ pub struct EndpointInfo {
 pub fn is_virtual_audio_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.contains("memeboard virtual mic")
+        || lower.contains("memeboard_virtual")
         || lower.contains("vb-audio")
         || lower.contains("cable input")
         || lower.contains("cable output")
@@ -246,8 +247,49 @@ mod win_policy {
     }
 }
 
-#[cfg(not(windows))]
-mod win_policy {
+#[cfg(target_os = "linux")]
+mod os_policy {
+    use super::*;
+    use crate::virtual_mic::linux_audio;
+
+    pub fn enumerate_active_endpoints(capture: bool) -> Result<Vec<EndpointInfo>, String> {
+        linux_audio::enumerate_active_endpoints(capture)
+    }
+    pub fn get_default_endpoint(capture: bool, comms: bool) -> Option<EndpointInfo> {
+        linux_audio::get_default_endpoint(capture, comms)
+    }
+    pub fn set_default_all_roles(device_id: &str) -> Result<(), String> {
+        linux_audio::set_default_endpoint(true, device_id)
+    }
+    pub fn set_default_console_and_comms(
+        capture: bool,
+        console_id: Option<&str>,
+        comms_id: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(id) = console_id.or(comms_id) {
+            linux_audio::set_default_endpoint(capture, id)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+mod os_policy {
+    pub use super::win_policy::{
+        enumerate_active_endpoints, get_default_endpoint, set_default_all_roles,
+    };
+
+    pub fn set_default_console_and_comms(
+        _capture: bool,
+        console_id: Option<&str>,
+        comms_id: Option<&str>,
+    ) -> Result<(), String> {
+        super::win_policy::set_default_console_and_comms(console_id, comms_id)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+mod os_policy {
     use super::*;
     pub fn enumerate_active_endpoints(_capture: bool) -> Result<Vec<EndpointInfo>, String> {
         Ok(Vec::new())
@@ -259,6 +301,7 @@ mod win_policy {
         Ok(())
     }
     pub fn set_default_console_and_comms(
+        _capture: bool,
         _console_id: Option<&str>,
         _comms_id: Option<&str>,
     ) -> Result<(), String> {
@@ -266,7 +309,7 @@ mod win_policy {
     }
 }
 
-pub use win_policy::{enumerate_active_endpoints, get_default_endpoint};
+pub use os_policy::{enumerate_active_endpoints, get_default_endpoint};
 
 /// Snapshots current real (non-virtual) physical defaults into `mic_restore.json`
 /// without overwriting an earlier active crash-recovery snapshot.
@@ -387,7 +430,7 @@ pub fn guard_playback_defaults(snapshot: &MicRestoreState) {
                 .clone()
                 .or_else(fallback_render);
             if let Some(orig) = target.as_deref() {
-                let _ = win_policy::set_default_console_and_comms(Some(orig), None);
+                let _ = os_policy::set_default_console_and_comms(false, Some(orig), None);
             }
         }
     }
@@ -398,7 +441,7 @@ pub fn guard_playback_defaults(snapshot: &MicRestoreState) {
                 .clone()
                 .or_else(fallback_render);
             if let Some(orig) = target.as_deref() {
-                let _ = win_policy::set_default_console_and_comms(None, Some(orig));
+                let _ = os_policy::set_default_console_and_comms(false, None, Some(orig));
             }
         }
     }
@@ -425,7 +468,7 @@ pub fn switch_default_mic_to_virtual(snapshot: &MicRestoreState) -> Result<Strin
         .as_secs();
     save_restore_state(&restore_file_path(), &updated)?;
 
-    win_policy::set_default_all_roles(&virtual_ep.id)?;
+    os_policy::set_default_all_roles(&virtual_ep.id)?;
     guard_playback_defaults(&updated);
     Ok(virtual_ep.friendly_name.clone())
 }
@@ -462,7 +505,8 @@ pub fn restore_original_mic() -> Result<(), String> {
         .or_else(|| target_console.clone());
 
     if target_console.is_some() || target_comms.is_some() {
-        win_policy::set_default_console_and_comms(
+        os_policy::set_default_console_and_comms(
+            true,
             target_console.as_deref(),
             target_comms.as_deref(),
         )?;
@@ -474,8 +518,11 @@ pub fn restore_original_mic() -> Result<(), String> {
 }
 
 pub fn is_virtual_mic_currently_default() -> bool {
-    get_default_endpoint(true, false)
-        .is_some_and(|e| e.friendly_name.to_lowercase().contains("memeboard virtual mic"))
+    get_default_endpoint(true, false).is_some_and(|e| {
+        let f = e.friendly_name.to_lowercase();
+        let id = e.id.to_lowercase();
+        f.contains("memeboard virtual mic") || id.contains("memeboard_virtual_mic")
+    })
 }
 
 pub fn saved_original_physical_mic_name() -> Option<String> {

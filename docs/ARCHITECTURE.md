@@ -1,6 +1,6 @@
 # Memeboard Architecture
 
-Memeboard is a Windows desktop soundboard built on **Tauri v2** (`src-tauri/`) with a **React 19 + TypeScript + Tailwind CSS v4** frontend (`src/`).
+Memeboard is a cross-platform desktop soundboard (Windows & Linux) built on **Tauri v2** (`src-tauri/`) with a **React 19 + TypeScript + Tailwind CSS v4** frontend (`src/`).
 
 ---
 
@@ -61,31 +61,32 @@ Audio callbacks never allocate or block on mutexes:
      - Plays both normal clips and `preview_only` editor previews (previews never enter the broadcast stream).
      - Optionally applies a `+7 Hz` single-sideband Hilbert phase shift (`StereoHilbertShifter`) to active broadcast clips on headphones (`aec_safe_monitor`) so Discord/TeamSpeak/WebRTC linear Acoustic Echo Cancellation cannot lock onto and cancel clips bleeding from open-back headphones or speakers.
 
-### 2.3 Device Routing (`src-tauri/src/device_manager.rs`)
-- Runs a dedicated single-threaded WASAPI actor (`memeboard-wasapi-actor`) so `!Send` `cpal::Stream` handles never cross threads.
-- Strictly avoids routing physical mic capture to virtual endpoints or motherboard loopback mixers (e.g., `Sonic Studio Virtual Mixer`).
-- Elevates audio callback threads via MMCSS (`Pro Audio`) in `windows_svc.rs`.
+### 2.3 Device Routing (`src-tauri/src/device_manager.rs`, `linux_audio_io.rs`, `audio_thread.rs`)
+- Runs a dedicated single-threaded audio actor (`memeboard-audio-actor`) so `!Send` OS stream handles never cross threads.
+- **Windows**: Uses `cpal` WASAPI streams with MMCSS (`Pro Audio`) elevation.
+- **Linux**: Uses native `libpulse-binding` (`PipeWire` via `pipewire-pulse` or `PulseAudio`) streams (`48 kHz` stereo `f32`, `10 ms` / `480`-frame chunking) with RTKit real-time priority (`audio_thread_priority`) and `pa_context_subscribe` hot-plug recovery.
+- Strictly avoids routing physical mic capture to virtual endpoints, `.monitor` sources, or motherboard loopback mixers (e.g., `Sonic Studio Virtual Mixer`).
 
 ---
 
 ## 3. Built-in Virtual Microphone (`src-tauri/src/virtual_mic/`)
 
-- **UAC2 Device (`uac2.rs`, `delay_line.rs`)**: Emulates a full-speed USB Audio Class 2.0 device at `48 kHz` stereo with playback (render) and recording (capture) endpoints connected by a `DelayLine`. Windows binds its inbox `usbaudio2.sys` driver automatically.
-- **USB/IP Transport (`usbip/`)**: Local TCP USB/IP server talking to the WHQL-signed `usbip-win2` (`usbip2_ude`) kernel driver.
-- **Service vs In-Process (`windows_svc.rs`, `mod.rs`)**:
-  - Installed builds register `MemeboardVirtualAudio` (`memeboard.exe --service`), allowing standard non-elevated users to start/attach the virtual device without UAC prompts.
-  - Portable/dev builds fall back to `InProcessVirtualCable` when the service isn't installed.
-- **Default Mic Switching (`policy.rs`)**: Uses COM `IPolicyConfig` to save the user's physical default console & communications capture IDs to `%LOCALAPPDATA%\Memeboard\mic_restore.json`, switches defaults to **Memeboard Virtual Mic**, guards speaker defaults against PnP changes, and restores the physical mic cleanly on quit (or recovers on next startup after a crash).
+- **Windows (`uac2.rs`, `usbip/`, `windows_svc.rs`, `policy.rs`)**:
+  - Emulates a full-speed USB Audio Class 2.0 device over local USB/IP talking to the WHQL-signed `usbip-win2` (`usbip2_ude`) kernel driver (`MemeboardVirtualAudio` Windows Service or `InProcessVirtualCable` fallback).
+  - Uses COM `IPolicyConfig` to snapshot, switch, guard playback defaults, and restore the user's physical mic via `%LOCALAPPDATA%\Memeboard\mic_restore.json`.
+- **Linux (`linux_audio.rs`, `policy.rs`)**:
+  - Zero-driver userspace setup via `libpulse-binding`: sweeps any stale virtual modules on startup, loads `module-null-sink` (`memeboard_virtual_sink`) + `module-remap-source` (`memeboard_virtual_mic`, `media.class=Audio/Source`, `node.pause-on-idle=false`), guards playback sink defaults, and restores the physical default source cleanly on quit, `SIGTERM`/`SIGINT`, or `--restore-mic` via `~/.local/share/Memeboard/mic_restore.json`.
 
 ---
 
-## 4. Global Hotkeys & Single-Instance Activation (`src-tauri/src/hotkeys.rs`)
+## 4. Global Hotkeys & Single-Instance Activation (`src-tauri/src/hotkeys/`)
 
-- Acquires a Windows named mutex (`Local\MemeboardGuiSingleInstance_v1`). A second launch posts `WM_SHOW_MAIN_WINDOW` to the existing instance's message-only window (`MemeboardRawInputHotkeyWindow`) and exits.
-- Registers `RAWINPUTDEVICE` (`RIDEV_INPUTSINK`) for `RIM_TYPEKEYBOARD` on a dedicated pump thread:
-  - Non-consuming pass-through (never hooks/blocks keys in games like `Esc` or `F1–F24`).
-  - Suppresses key auto-repeat via `pressed_vkeys` tracking and recovers stuck modifiers after Win+L / UAC via `GetAsyncKeyState`.
-  - Paused automatically during hotkey capture in the UI (`set_hotkey_recording`).
+- Uses `tauri-plugin-single-instance` across Windows and Linux. Re-launching Memeboard activates the main window, and CLI flags (`--stop-all`, `--toggle-overlay`, `--trigger <sound_id>`) forward actions to the running instance.
+- **Windows (`hotkeys/windows.rs`)**: Registers `RAWINPUTDEVICE` (`RIDEV_INPUTSINK`) for `RIM_TYPEKEYBOARD` on a dedicated pump thread (non-consuming pass-through, auto-repeat suppression, Win+L/UAC modifier recovery).
+- **Linux (`hotkeys/linux.rs`)**:
+  - **X11**: `x11rb` `XInput2` (`XI_RawKeyPress` / `XI_RawKeyRelease`) on the root window paired with `xkbcommon` keymap resolution for layout-accurate, non-consuming pass-through.
+  - **Wayland**: `ashpd` (`org.freedesktop.portal.GlobalShortcuts`) where supported by the compositor, plus `--stop-all` / `--toggle-overlay` / `--trigger <id>` CLI shortcuts.
+- Paused automatically during hotkey capture in the UI (`set_hotkey_recording`).
 
 ---
 

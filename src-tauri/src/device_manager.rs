@@ -1,8 +1,13 @@
+use crate::audio_thread::{AudioThread, enter_audio_thread};
 use crate::mixer::{AudioMixer, CHANNELS, SAMPLE_RATE, StreamProcessor};
+#[cfg(not(target_os = "linux"))]
 use crate::types::{AudioDevice, AudioDevicesResult};
+#[cfg(target_os = "linux")]
+use crate::types::AudioDevicesResult;
 use crate::virtual_mic::policy;
-use crate::virtual_mic::windows_svc::{AudioThread, enter_audio_thread};
+#[cfg(not(target_os = "linux"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(not(target_os = "linux"))]
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use parking_lot::Mutex;
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
@@ -10,20 +15,23 @@ use ringbuf::{HeapCons, HeapProd, HeapRb};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+#[cfg(not(target_os = "linux"))]
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 
-const MIC_RING_FRAMES: usize = 4096;
+pub(crate) const MIC_RING_FRAMES: usize = 4096;
 const MIC_CUSHION_FRAMES: usize = 480; // 10 ms jitter cushion at 48 kHz
 const MIC_DRIFT_HIGH_OFFSET: usize = 960; // +20 ms above callback window
 const MIC_DRIFT_LOW_OFFSET: usize = 160; // ~3.3 ms cushion floor before slow-down
 const RESAMPLE_CHUNK: usize = 128;
 
+#[cfg(not(target_os = "linux"))]
 thread_local! {
     static PRO_AUDIO_GUARD: RefCell<Option<AudioThread>> = const { RefCell::new(None) };
 }
 
+#[cfg(not(target_os = "linux"))]
 #[inline]
 fn ensure_pro_audio_thread() {
     PRO_AUDIO_GUARD.with(|cell| {
@@ -47,16 +55,17 @@ pub fn is_virtual_endpoint(name: &str) -> bool {
         || lower.contains("blackhole")
         || lower.contains("voicemeeter")
         || lower.contains("virtual audio cable")
+        || lower.ends_with(".monitor")
 }
 
 /// Returns priority score (higher is better) if an output device is a known virtual microphone
 /// broadcast bridge target, or `None` if it is a regular speaker/headphone or unsupported mixer.
-fn broadcast_virtual_priority(name: &str) -> Option<u8> {
+pub(crate) fn broadcast_virtual_priority(name: &str) -> Option<u8> {
     let lower = name.to_lowercase();
     if lower.contains("sonic studio virtual mixer") {
         return None;
     }
-    if lower.contains("memeboard virtual mic") {
+    if lower.contains("memeboard virtual mic") || lower.contains("memeboard_virtual") {
         return Some(100);
     }
     if lower.contains("cable input") {
@@ -77,7 +86,7 @@ fn broadcast_virtual_priority(name: &str) -> Option<u8> {
     None
 }
 
-struct StreamingResampler {
+pub(crate) struct StreamingResampler {
     resampler: SincFixedIn<f32>,
     chunk_size: usize,
     pending_l: Vec<f32>,
@@ -215,7 +224,7 @@ impl StreamingResampler {
     }
 }
 
-struct MicConsumerState {
+pub(crate) struct MicConsumerState {
     cons: HeapCons<[f32; 2]>,
     primed: bool,
     raw_scratch: Vec<[f32; 2]>,
@@ -223,7 +232,7 @@ struct MicConsumerState {
 }
 
 impl MicConsumerState {
-    fn new(cons: HeapCons<[f32; 2]>) -> Self {
+    pub(crate) fn new(cons: HeapCons<[f32; 2]>) -> Self {
         Self {
             cons,
             primed: false,
@@ -343,12 +352,12 @@ impl MicConsumerState {
 }
 
 #[derive(Default, Clone)]
-struct DeviceSnapshot {
-    active_input_id: Option<String>,
-    active_broadcast_id: Option<String>,
-    active_monitor_id: Option<String>,
-    mic_stream_active: bool,
-    last_error: Option<String>,
+pub(crate) struct DeviceSnapshot {
+    pub(crate) active_input_id: Option<String>,
+    pub(crate) active_broadcast_id: Option<String>,
+    pub(crate) active_monitor_id: Option<String>,
+    pub(crate) mic_stream_active: bool,
+    pub(crate) last_error: Option<String>,
 }
 
 enum ActorCmd {
@@ -360,9 +369,12 @@ enum ActorCmd {
         monitor_id: Option<String>,
         reply: mpsc::Sender<Result<DeviceSnapshot, String>>,
     },
+    #[cfg(target_os = "linux")]
+    HotplugCheck,
     StopAll(mpsc::Sender<()>),
 }
 
+#[cfg(not(target_os = "linux"))]
 struct StreamHolder {
     mic_stream: Option<Stream>,
     broadcast_stream: Option<Stream>,
@@ -370,6 +382,7 @@ struct StreamHolder {
     snapshot: DeviceSnapshot,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl StreamHolder {
     fn new() -> Self {
         Self {
@@ -555,8 +568,8 @@ impl StreamHolder {
     }
 }
 
-/// Thread-safe handle managing WASAPI streams via a dedicated single-threaded audio control actor
-/// so `cpal::Stream` (`!Send`) never crosses OS thread boundaries.
+/// Thread-safe handle managing audio streams via a dedicated single-threaded audio control actor
+/// so `!Send` OS stream handles never cross thread boundaries.
 pub struct DeviceManager {
     tx: Sender<ActorCmd>,
     snapshot: Arc<Mutex<DeviceSnapshot>>,
@@ -567,8 +580,102 @@ impl DeviceManager {
         let (tx, rx) = mpsc::channel::<ActorCmd>();
         let snapshot = Arc::new(Mutex::new(DeviceSnapshot::default()));
 
+        #[cfg(target_os = "linux")]
+        {
+            let snapshot_actor = Arc::clone(&snapshot);
+            let tx_hotplug = tx.clone();
+            let (hp_tx, hp_rx) = mpsc::channel::<crate::linux_audio_io::HotplugEvent>();
+
+            std::thread::Builder::new()
+                .name("memeboard-linux-hotplug".to_string())
+                .spawn(move || {
+                    while hp_rx.recv().is_ok() {
+                        // Debounce rapid PulseAudio/PipeWire node changes (e.g. module setup or BT profile switch)
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        while hp_rx.try_recv().is_ok() {}
+                        if tx_hotplug.send(ActorCmd::HotplugCheck).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .ok();
+
+            std::thread::Builder::new()
+                .name("memeboard-audio-actor".to_string())
+                .spawn(move || {
+                    let mut holder = crate::linux_audio_io::LinuxAudioHolder::new(Some(hp_tx));
+                    let mut last_mixer: Option<Arc<AudioMixer>> = None;
+                    let mut last_req: (Option<String>, Option<String>, Option<String>) =
+                        (None, None, None);
+
+                    while let Ok(cmd) = rx.recv() {
+                        match cmd {
+                            ActorCmd::GetDevices(reply) => {
+                                let _ = reply.send(holder.get_audio_devices());
+                            }
+                            ActorCmd::RestartStreams {
+                                mixer,
+                                input_id,
+                                broadcast_id,
+                                monitor_id,
+                                reply,
+                            } => {
+                                last_mixer = Some(Arc::clone(&mixer));
+                                last_req = (
+                                    input_id.clone(),
+                                    broadcast_id.clone(),
+                                    monitor_id.clone(),
+                                );
+                                let res = holder.restart_streams(
+                                    mixer,
+                                    input_id,
+                                    broadcast_id,
+                                    monitor_id,
+                                );
+                                if let Ok(ref snap) = res {
+                                    *snapshot_actor.lock() = snap.clone();
+                                }
+                                let _ = reply.send(res);
+                            }
+                            ActorCmd::HotplugCheck => {
+                                if let Some(mixer) = last_mixer.as_ref() {
+                                    if let Ok((r_in, r_bcast, r_mon)) = holder.resolve_targets(
+                                        last_req.0.as_deref(),
+                                        last_req.1.as_deref(),
+                                        last_req.2.as_deref(),
+                                    ) {
+                                        let changed = r_in != holder.snapshot.active_input_id
+                                            || r_bcast != holder.snapshot.active_broadcast_id
+                                            || r_mon != holder.snapshot.active_monitor_id;
+                                        if changed {
+                                            if let Ok(snap) = holder.restart_streams(
+                                                Arc::clone(mixer),
+                                                last_req.0.clone(),
+                                                last_req.1.clone(),
+                                                last_req.2.clone(),
+                                            ) {
+                                                *snapshot_actor.lock() = snap;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ActorCmd::StopAll(reply) => {
+                                holder.stop_all();
+                                last_mixer = None;
+                                *snapshot_actor.lock() = DeviceSnapshot::default();
+                                let _ = reply.send(());
+                            }
+                        }
+                    }
+                    holder.stop_all();
+                })
+                .expect("Failed to spawn Linux audio device actor");
+        }
+
+        #[cfg(not(target_os = "linux"))]
         std::thread::Builder::new()
-            .name("memeboard-wasapi-actor".to_string())
+            .name("memeboard-audio-actor".to_string())
             .spawn(move || {
                 let mut holder = StreamHolder::new();
                 while let Ok(cmd) = rx.recv() {
@@ -598,7 +705,7 @@ impl DeviceManager {
                 }
                 holder.stop_all();
             })
-            .expect("Failed to spawn WASAPI device actor");
+            .expect("Failed to spawn audio device actor");
 
         Self { tx, snapshot }
     }
@@ -652,7 +759,10 @@ impl DeviceManager {
         }
         *self.snapshot.lock() = DeviceSnapshot::default();
     }
+}
 
+#[cfg(not(target_os = "linux"))]
+impl DeviceManager {
     fn resolve_input_device(host: &cpal::Host, requested_id: Option<&str>) -> Option<Device> {
         let names: Vec<String> = host
             .input_devices()
@@ -1037,14 +1147,14 @@ impl DeviceManager {
     }
 }
 
-struct MicCaptureState {
-    prod: HeapProd<[f32; 2]>,
-    in_channels: usize,
-    resampler: Option<StreamingResampler>,
+pub(crate) struct MicCaptureState {
+    pub(crate) prod: HeapProd<[f32; 2]>,
+    pub(crate) in_channels: usize,
+    pub(crate) resampler: Option<StreamingResampler>,
 }
 
 impl MicCaptureState {
-    fn push_samples<T: Copy>(&mut self, data: &[T], convert: fn(T) -> f32) {
+    pub(crate) fn push_samples<T: Copy>(&mut self, data: &[T], convert: fn(T) -> f32) {
         let ch = self.in_channels;
         if ch == 0 {
             return;
@@ -1071,17 +1181,17 @@ impl MicCaptureState {
     }
 }
 
-struct BroadcastOutputEngine {
-    processor: StreamProcessor,
-    mic: MicConsumerState,
-    mic_stream_active: bool,
-    out_channels: usize,
-    resampler: Option<StreamingResampler>,
-    scratch_48k: Vec<f32>,
+pub(crate) struct BroadcastOutputEngine {
+    pub(crate) processor: StreamProcessor,
+    pub(crate) mic: MicConsumerState,
+    pub(crate) mic_stream_active: bool,
+    pub(crate) out_channels: usize,
+    pub(crate) resampler: Option<StreamingResampler>,
+    pub(crate) scratch_48k: Vec<f32>,
 }
 
 impl BroadcastOutputEngine {
-    fn render_into<T: Copy>(&mut self, data: &mut [T], encode: fn(f32) -> T) {
+    pub(crate) fn render_into<T: Copy>(&mut self, data: &mut [T], encode: fn(f32) -> T) {
         let ch = self.out_channels;
         let out_frames = data.len() / ch;
         if out_frames == 0 {
@@ -1125,15 +1235,15 @@ impl BroadcastOutputEngine {
     }
 }
 
-struct MonitorOutputEngine {
-    processor: StreamProcessor,
-    out_channels: usize,
-    resampler: Option<StreamingResampler>,
-    scratch_48k: Vec<f32>,
+pub(crate) struct MonitorOutputEngine {
+    pub(crate) processor: StreamProcessor,
+    pub(crate) out_channels: usize,
+    pub(crate) resampler: Option<StreamingResampler>,
+    pub(crate) scratch_48k: Vec<f32>,
 }
 
 impl MonitorOutputEngine {
-    fn render_into<T: Copy>(&mut self, data: &mut [T], encode: fn(f32) -> T) {
+    pub(crate) fn render_into<T: Copy>(&mut self, data: &mut [T], encode: fn(f32) -> T) {
         let ch = self.out_channels;
         let out_frames = data.len() / ch;
         if out_frames == 0 {

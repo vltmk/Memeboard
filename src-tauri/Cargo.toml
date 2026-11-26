@@ -17,9 +17,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal = "0.15"
+audio_thread_priority = "0.32"
 symphonia = { version = "0.5.4", features = ["all"] }
 mousiki = "0.2.1"
 rubato = "0.16"
@@ -29,6 +31,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "6.0"
 socket2 = { version = "0.5", features = ["all"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libpulse-binding = "2.28"
+x11rb = { version = "0.13", features = ["xinput"] }
+xkbcommon = "0.8"
+ashpd = { version = "0.10", default-features = false, features = ["tokio"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+ctrlc = { version = "3.4", features = ["termination"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"

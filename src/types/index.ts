@@ -83,3 +83,8 @@ export interface VirtualMicStatus {
   savedPhysicalMic: string | null;
   statusMessage: string;
 }
+
+export interface PlatformInfo {
+  os: 'windows' | 'linux' | string;
+  sessionType: 'win32' | 'x11' | 'wayland' | string;
+}

@@ -1,7 +1,10 @@
+pub mod audio_thread;
 pub mod commands;
 pub mod decoder;
 pub mod device_manager;
 pub mod hotkeys;
+#[cfg(target_os = "linux")]
+pub mod linux_audio_io;
 pub mod mixer;
 pub mod state_manager;
 pub mod types;
@@ -14,12 +17,13 @@ unsafe extern "C" {}
 use commands::{
     AppState, bring_window_to_front, configure_frameless_window, delete_sound, dock_main_window,
     dock_window_bottom_right, export_pack, export_sound_file, get_audio_devices,
-    get_overlay_visibility, get_playback_status, get_virtual_mic_status, import_pack,
-    import_sound_file, install_virtual_driver, is_main_docked, is_window_docked_bottom_right,
-    load_soundboard_state, play_sound, play_sound_internal, preview_sound, restore_original_mic,
-    save_soundboard_state, set_aec_safe_monitor, set_audio_devices, set_auto_switch_mic,
-    set_ducking_settings, set_hotkey_recording, set_volumes, stop_all_sounds, stop_preview,
-    stop_sound, sync_hotkeys_from_state, toggle_overlay_window, toggle_overlay_window_internal,
+    get_overlay_visibility, get_platform_info, get_playback_status, get_virtual_mic_status,
+    import_pack, import_sound_file, install_virtual_driver, is_main_docked,
+    is_window_docked_bottom_right, load_soundboard_state, play_sound, play_sound_internal,
+    preview_sound, restore_original_mic, save_soundboard_state, set_aec_safe_monitor,
+    set_audio_devices, set_auto_switch_mic, set_ducking_settings, set_hotkey_recording,
+    set_volumes, stop_all_sounds, stop_preview, stop_sound, sync_hotkeys_from_state,
+    toggle_overlay_window, toggle_overlay_window_internal,
 };
 use device_manager::DeviceManager;
 use hotkeys::{HotkeyAction, HotkeyManager};
@@ -61,13 +65,40 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+fn handle_forwarded_cli_args(app: &AppHandle, args: &[String]) {
+    let mut handled_action = false;
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--stop-all" => {
+                app.state::<AppState>().mixer.stop_all();
+                let _ = app.emit("soundboard-panic", ());
+                handled_action = true;
+            }
+            "--toggle-overlay" => {
+                let _ = toggle_overlay_window_internal(app);
+                handled_action = true;
+            }
+            "--trigger" => {
+                if let Some(sound_id) = iter.next() {
+                    let st = app.state::<AppState>();
+                    if play_sound_internal(&st, sound_id).is_ok() {
+                        let _ = app.emit("sound-triggered", sound_id);
+                    }
+                    handled_action = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !handled_action {
+        show_main_window(app);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(target_os = "windows")]
-    let Some(_single_instance) = hotkeys::acquire_single_instance_or_activate() else {
-        return;
-    };
-
     let state_manager = Arc::new(StateManager::new().expect("Failed to initialize Memeboard storage"));
     let initial_state = state_manager.load_state().unwrap_or_else(|e| {
         eprintln!("[Memeboard] State load fallback ({e})");
@@ -116,11 +147,15 @@ pub fn run() {
         hotkeys: Arc::clone(&hotkeys),
         board_state: Mutex::new(initial_state.clone()),
         overlay_visible: AtomicBool::new(false),
+        tray_available: AtomicBool::new(false),
     };
 
     sync_hotkeys_from_state(&app_state);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            handle_forwarded_cli_args(app, &args);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
@@ -256,7 +291,29 @@ pub fn run() {
             if let Some(icon) = app.default_window_icon().cloned() {
                 tray_builder = tray_builder.icon(icon);
             }
-            let _ = tray_builder.build(app)?;
+            let tray_ok = match tray_builder.build(app) {
+                Ok(_) => true,
+                Err(err) => {
+                    eprintln!("[Memeboard] System tray unavailable ({err}); close will minimize.");
+                    false
+                }
+            };
+            handle
+                .state::<AppState>()
+                .tray_available
+                .store(tray_ok, Ordering::Release);
+
+            #[cfg(target_os = "linux")]
+            {
+                let sig_handle = handle.clone();
+                if let Err(err) = ctrlc::set_handler(move || {
+                    perform_clean_shutdown(&sig_handle);
+                    sig_handle.exit(0);
+                }) {
+                    eprintln!("[Memeboard] Signal handler registration skipped: {err}");
+                }
+            }
+
             eprintln!("[Memeboard] setup() complete; entering event loop");
 
             Ok(())
@@ -264,9 +321,17 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "main" {
-                    // Close-to-tray so virtual mic + global hotkeys keep working cleanly
                     api.prevent_close();
-                    let _ = window.hide();
+                    if window
+                        .app_handle()
+                        .state::<AppState>()
+                        .tray_available
+                        .load(Ordering::Acquire)
+                    {
+                        let _ = window.hide();
+                    } else {
+                        let _ = window.minimize();
+                    }
                 } else if window.label() == "overlay" {
                     api.prevent_close();
                     let _ = window.hide();
@@ -312,6 +377,7 @@ pub fn run() {
             dock_main_window,
             is_main_docked,
             set_hotkey_recording,
+            get_platform_info,
             get_virtual_mic_status,
             install_virtual_driver,
             set_auto_switch_mic,

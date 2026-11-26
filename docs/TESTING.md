@@ -45,11 +45,12 @@ npm run build
 ```
 Runs `tsc` (strict TypeScript compilation) followed by `vite build` to verify all TSX components, Tailwind v4 CSS rules, and bundled font assets (`Inter Variable`, `Ioskeley Mono`, `IRANYekanWeb`).
 
-### 1.4 Full NSIS Installer Build
+### 1.4 Full Platform Installer / Package Build
 ```bash
 npm run tauri build
 ```
-Verifies `scripts/prepare-driver.mjs` (SHA-256 verification of `USBip-0.9.8.1-x64.exe`), builds the release binary with LTO, and packages `src-tauri/target/release/bundle/nsis/Memeboard_<version>_x64-setup.exe`.
+- **Windows**: Verifies `scripts/prepare-driver.mjs` (SHA-256 verification of `USBip-0.9.8.1-x64.exe`), builds the release binary with LTO, and packages `src-tauri/target/release/bundle/nsis/Memeboard_<version>_x64-setup.exe`.
+- **Linux (`ubuntu-22.04` CI)**: Skips Windows driver download, builds the release binary with LTO, and packages `.AppImage`, `.deb`, and `.rpm` bundles (`tauri.linux.conf.json`).
 
 ---
 

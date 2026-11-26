@@ -16,7 +16,7 @@ import {
   Package,
   SlidersHorizontal,
 } from 'lucide-react';
-import { SoundItem, VirtualMicStatus } from '../types';
+import { PlatformInfo, SoundItem, VirtualMicStatus } from '../types';
 import { SoundPill } from './SoundPill';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -47,6 +47,7 @@ interface SoundGridProps {
   onOpenSettings: () => void;
   onInstallVirtualDriver: () => void;
   isInstallingDriver: boolean;
+  platformInfo?: PlatformInfo;
 }
 
 type ContextMenuState =
@@ -79,6 +80,7 @@ export const SoundGrid: React.FC<SoundGridProps> = ({
   onOpenSettings,
   onInstallVirtualDriver,
   isInstallingDriver,
+  platformInfo,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -164,9 +166,13 @@ export const SoundGrid: React.FC<SoundGridProps> = ({
         <div className="mx-3 mt-2.5 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-between gap-2 shrink-0">
           <div className="min-w-0">
             <p className="text-[11px] font-medium text-zinc-100 truncate">
-              {virtualMicStatus.driverInstalled
-                ? 'Virtual Mic Standby'
-                : 'Setup Built-in Virtual Mic'}
+              {platformInfo?.os === 'linux'
+                ? virtualMicStatus.driverInstalled
+                  ? 'Virtual Mic Standby'
+                  : 'PipeWire / PulseAudio Needed'
+                : virtualMicStatus.driverInstalled
+                  ? 'Virtual Mic Standby'
+                  : 'Setup Built-in Virtual Mic'}
             </p>
             <p className="text-[10px] text-zinc-400 truncate">
               {virtualMicStatus.statusMessage}
@@ -184,7 +190,9 @@ export const SoundGrid: React.FC<SoundGridProps> = ({
               disabled={isInstallingDriver}
             >
               <Wrench className="w-3 h-3" />
-              <span>{isInstallingDriver ? 'Wait...' : 'Setup'}</span>
+              <span>
+                {isInstallingDriver ? 'Wait...' : platformInfo?.os === 'linux' ? 'Retry' : 'Setup'}
+              </span>
             </Button>
           </div>
         </div>

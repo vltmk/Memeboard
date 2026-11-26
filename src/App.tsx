@@ -14,6 +14,7 @@ import {
   AudioPlaybackStatus,
   AudioSettings,
   PlaybackMode,
+  PlatformInfo,
   SoundItem,
   SoundboardState,
   VirtualMicStatus,
@@ -94,6 +95,10 @@ const MainApp: React.FC = () => {
   });
   const [playbackStatus, setPlaybackStatus] = useState<AudioPlaybackStatus>(DEFAULT_PLAYBACK_STATUS);
   const [virtualMicStatus, setVirtualMicStatus] = useState<VirtualMicStatus | null>(null);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo>({
+    os: 'windows',
+    sessionType: 'win32',
+  });
   const [isInstallingDriver, setIsInstallingDriver] = useState(false);
 
   const [editingSound, setEditingSound] = useState<SoundItem | null>(null);
@@ -142,16 +147,18 @@ const MainApp: React.FC = () => {
 
     (async () => {
       try {
-        const [loaded, devs, vm, docked] = await Promise.all([
+        const [loaded, devs, vm, docked, plat] = await Promise.all([
           api.loadSoundboardState(),
           api.getAudioDevices(),
           api.getVirtualMicStatus(),
           api.isMainDocked().catch(() => true),
+          api.getPlatformInfo().catch(() => ({ os: 'windows', sessionType: 'win32' })),
         ]);
         setBoardState({ ...loaded, categories: loaded.categories ?? [] });
         setAudioDevices(devs);
         setVirtualMicStatus(vm);
         setIsDocked(docked);
+        setPlatformInfo(plat);
       } catch (err) {
         console.error('Initialization failed:', err);
       }
@@ -731,6 +738,7 @@ const MainApp: React.FC = () => {
         }}
         onInstallVirtualDriver={handleInstallVirtualDriver}
         isInstallingDriver={isInstallingDriver}
+        platformInfo={platformInfo}
       />
 
       <SoundEditorModal
@@ -776,6 +784,7 @@ const MainApp: React.FC = () => {
         onSetAutoSwitchMic={handleSetAutoSwitchMic}
         onRestoreOriginalMic={() => handleSetAutoSwitchMic(false)}
         isInstallingDriver={isInstallingDriver}
+        platformInfo={platformInfo}
       />
 
       {toastMsg && (

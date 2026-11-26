@@ -1,3 +1,4 @@
+use super::parser::{HotkeyAction, HotkeyBinding, HotkeyCombo, LogicalKey};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -22,27 +23,57 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 pub const HOTKEY_WINDOW_CLASS: &str = "MemeboardRawInputHotkeyWindow";
 pub const WM_SHOW_MAIN_WINDOW: u32 = WM_APP + 42;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HotkeyCombo {
-    pub ctrl: bool,
-    pub shift: bool,
-    pub alt: bool,
-    pub super_key: bool,
-    pub vkey: u16,
+fn vkey_to_logical(vkey: u16) -> Option<LogicalKey> {
+    match vkey {
+        0x41..=0x5A => Some(LogicalKey::Char((vkey as u8) as char)),
+        0x30..=0x39 => Some(LogicalKey::Digit((vkey as u8) - b'0')),
+        vk if (VK_F1..=VK_F24).contains(&vk) => Some(LogicalKey::F((vk - VK_F1 + 1) as u8)),
+        vk if (VK_NUMPAD0..=VK_NUMPAD9).contains(&vk) => {
+            Some(LogicalKey::Numpad((vk - VK_NUMPAD0) as u8))
+        }
+        VK_ADD => Some(LogicalKey::NumpadAdd),
+        VK_SUBTRACT => Some(LogicalKey::NumpadSubtract),
+        VK_MULTIPLY => Some(LogicalKey::NumpadMultiply),
+        VK_DIVIDE => Some(LogicalKey::NumpadDivide),
+        VK_DECIMAL => Some(LogicalKey::NumpadDecimal),
+        VK_SPACE => Some(LogicalKey::Space),
+        VK_ESCAPE => Some(LogicalKey::Escape),
+        VK_RETURN => Some(LogicalKey::Enter),
+        VK_TAB => Some(LogicalKey::Tab),
+        VK_BACK => Some(LogicalKey::Backspace),
+        VK_DELETE => Some(LogicalKey::Delete),
+        VK_INSERT => Some(LogicalKey::Insert),
+        VK_HOME => Some(LogicalKey::Home),
+        VK_END => Some(LogicalKey::End),
+        VK_PRIOR => Some(LogicalKey::PageUp),
+        VK_NEXT => Some(LogicalKey::PageDown),
+        VK_UP => Some(LogicalKey::Up),
+        VK_DOWN => Some(LogicalKey::Down),
+        VK_LEFT => Some(LogicalKey::Left),
+        VK_RIGHT => Some(LogicalKey::Right),
+        VK_CAPITAL => Some(LogicalKey::CapsLock),
+        VK_PAUSE => Some(LogicalKey::Pause),
+        VK_SNAPSHOT => Some(LogicalKey::PrintScreen),
+        VK_OEM_MINUS => Some(LogicalKey::Minus),
+        VK_OEM_PLUS => Some(LogicalKey::Equal),
+        VK_OEM_4 => Some(LogicalKey::BracketLeft),
+        VK_OEM_6 => Some(LogicalKey::BracketRight),
+        VK_OEM_5 => Some(LogicalKey::Backslash),
+        VK_OEM_1 => Some(LogicalKey::Semicolon),
+        VK_OEM_7 => Some(LogicalKey::Quote),
+        VK_OEM_COMMA => Some(LogicalKey::Comma),
+        VK_OEM_PERIOD => Some(LogicalKey::Period),
+        VK_OEM_2 => Some(LogicalKey::Slash),
+        VK_OEM_3 => Some(LogicalKey::Backquote),
+        _ => None,
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HotkeyAction {
-    Panic,
-    ToggleOverlay,
-    TriggerSound(String),
-    ShowMainWindow,
-}
-
-#[derive(Debug, Clone)]
-pub struct HotkeyBinding {
-    pub combo: HotkeyCombo,
-    pub action: HotkeyAction,
+fn combo_matches_vkey(combo: &HotkeyCombo, vkey: u16, is_e0: bool) -> bool {
+    if combo.key == LogicalKey::NumpadEnter {
+        return vkey == VK_RETURN && is_e0;
+    }
+    vkey_to_logical(vkey) == Some(combo.key)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -59,6 +90,16 @@ struct KeyboardState {
     win_left: bool,
     win_right: bool,
     pressed_vkeys: Vec<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawComboEvent {
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    super_key: bool,
+    vkey: u16,
+    is_e0: bool,
 }
 
 impl KeyboardState {
@@ -109,9 +150,15 @@ impl KeyboardState {
         }
     }
 
-    /// Processes one Raw Input keyboard event and returns Some(HotkeyCombo) only on initial
+    /// Processes one Raw Input keyboard event and returns Some(RawComboEvent) only on initial
     /// non-repeat primary key press (never on modifier-only presses, repeats, or releases).
-    fn process_event(&mut self, vkey: u16, make_code: u16, is_break: bool, is_e0: bool) -> Option<HotkeyCombo> {
+    fn process_event(
+        &mut self,
+        vkey: u16,
+        make_code: u16,
+        is_break: bool,
+        is_e0: bool,
+    ) -> Option<RawComboEvent> {
         if vkey == 0 || vkey == 0xFF || vkey as usize >= 256 {
             return None;
         }
@@ -120,17 +167,17 @@ impl KeyboardState {
         let resolved_vk = resolve_vkey(vkey, make_code, is_e0);
 
         match resolved_vk {
-            0xA2 => self.ctrl_left = down,    // VK_LCONTROL
-            0xA3 => self.ctrl_right = down,   // VK_RCONTROL
-            0x11 => self.ctrl_generic = down, // VK_CONTROL
-            0xA0 => self.shift_left = down,   // VK_LSHIFT
-            0xA1 => self.shift_right = down,  // VK_RSHIFT
-            0x10 => self.shift_generic = down,// VK_SHIFT
-            0xA4 => self.alt_left = down,     // VK_LMENU
-            0xA5 => self.alt_right = down,    // VK_RMENU
-            0x12 => self.alt_generic = down,  // VK_MENU
-            0x5B => self.win_left = down,     // VK_LWIN
-            0x5C => self.win_right = down,    // VK_RWIN
+            0xA2 => self.ctrl_left = down,     // VK_LCONTROL
+            0xA3 => self.ctrl_right = down,    // VK_RCONTROL
+            0x11 => self.ctrl_generic = down,  // VK_CONTROL
+            0xA0 => self.shift_left = down,    // VK_LSHIFT
+            0xA1 => self.shift_right = down,   // VK_RSHIFT
+            0x10 => self.shift_generic = down, // VK_SHIFT
+            0xA4 => self.alt_left = down,      // VK_LMENU
+            0xA5 => self.alt_right = down,     // VK_RMENU
+            0x12 => self.alt_generic = down,   // VK_MENU
+            0x5B => self.win_left = down,      // VK_LWIN
+            0x5C => self.win_right = down,     // VK_RWIN
             _ => {}
         }
 
@@ -140,7 +187,6 @@ impl KeyboardState {
             return None;
         }
 
-        // Ignore key auto-repeat while key is held down
         if self.pressed_vkeys[idx] {
             return None;
         }
@@ -150,12 +196,13 @@ impl KeyboardState {
             return None;
         }
 
-        Some(HotkeyCombo {
+        Some(RawComboEvent {
             ctrl: self.ctrl(),
             shift: self.shift(),
             alt: self.alt(),
             super_key: self.super_key(),
             vkey: resolved_vk,
+            is_e0,
         })
     }
 }
@@ -172,184 +219,37 @@ fn is_modifier_vkey(vk: u16) -> bool {
 fn resolve_vkey(vkey: u16, make_code: u16, is_e0: bool) -> u16 {
     match vkey {
         0x11 => {
-            // VK_CONTROL
             if is_e0 { 0xA3 } else { 0xA2 }
         }
         0x12 => {
-            // VK_MENU
             if is_e0 { 0xA5 } else { 0xA4 }
         }
         0x10 => {
-            // VK_SHIFT (distinguish via scan code 0x36 = RSHIFT)
             if make_code == 0x36 { 0xA1 } else { 0xA0 }
         }
         other => other,
     }
 }
 
-pub fn parse_hotkey(spec: &str) -> Option<HotkeyCombo> {
-    let trimmed = spec.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let mut ctrl = false;
-    let mut shift = false;
-    let mut alt = false;
-    let mut super_key = false;
-    let mut primary_vk: Option<u16> = None;
-
-    // Handle literal trailing '+' key (e.g. "+" or "Control+Shift++")
-    let (body, trailing_plus) = if trimmed == "+" {
-        ("", true)
-    } else if let Some(prefix) = trimmed.strip_suffix("++") {
-        (prefix, true)
-    } else {
-        (trimmed, false)
-    };
-    if trailing_plus {
-        primary_vk = Some(VK_OEM_PLUS);
-    }
-
-    for raw_part in body.split('+') {
-        let part = raw_part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let lower = part.to_ascii_lowercase();
-        match lower.as_str() {
-            "control" | "ctrl" | "commandorcontrol" | "cmdorctrl" => ctrl = true,
-            "shift" => shift = true,
-            "alt" | "option" => alt = true,
-            "super" | "meta" | "win" | "command" | "cmd" => super_key = true,
-            _ => {
-                primary_vk = parse_primary_vkey(part);
-                if primary_vk.is_none() {
-                    return None;
-                }
-            }
-        }
-    }
-
-    primary_vk.map(|vkey| HotkeyCombo {
-        ctrl,
-        shift,
-        alt,
-        super_key,
-        vkey,
-    })
-}
-
-fn parse_primary_vkey(token: &str) -> Option<u16> {
-    let t = token.trim();
-    if t.len() == 1 {
-        let ch = t.chars().next()?.to_ascii_uppercase();
-        return match ch {
-            'A'..='Z' => Some(ch as u16),
-            '0'..='9' => Some(ch as u16),
-            '-' | '_' => Some(VK_OEM_MINUS),
-            '=' | '+' => Some(VK_OEM_PLUS),
-            '[' | '{' => Some(VK_OEM_4),
-            ']' | '}' => Some(VK_OEM_6),
-            '\\' | '|' => Some(VK_OEM_5),
-            ';' | ':' => Some(VK_OEM_1),
-            '\'' | '"' => Some(VK_OEM_7),
-            ',' | '<' => Some(VK_OEM_COMMA),
-            '.' | '>' => Some(VK_OEM_PERIOD),
-            '/' | '?' => Some(VK_OEM_2),
-            '`' | '~' => Some(VK_OEM_3),
-            '!' => Some(b'1' as u16),
-            '@' => Some(b'2' as u16),
-            '#' => Some(b'3' as u16),
-            '$' => Some(b'4' as u16),
-            '%' => Some(b'5' as u16),
-            '^' => Some(b'6' as u16),
-            '&' => Some(b'7' as u16),
-            '*' => Some(b'8' as u16),
-            '(' => Some(b'9' as u16),
-            ')' => Some(b'0' as u16),
-            _ => None,
-        };
-    }
-
-    let lower = t.to_ascii_lowercase();
-    if let Some(num) = lower.strip_prefix('f') {
-        if let Ok(n) = num.parse::<u16>() {
-            if (1..=24).contains(&n) {
-                return Some(VK_F1 + (n - 1));
-            }
-        }
-    }
-    if let Some(np) = lower.strip_prefix("numpad") {
-        if let Ok(n) = np.parse::<u16>() {
-            if n <= 9 {
-                return Some(VK_NUMPAD0 + n);
-            }
-        }
-        return match np {
-            "add" | "plus" => Some(VK_ADD),
-            "subtract" | "minus" => Some(VK_SUBTRACT),
-            "multiply" => Some(VK_MULTIPLY),
-            "divide" => Some(VK_DIVIDE),
-            "decimal" => Some(VK_DECIMAL),
-            "enter" => Some(VK_RETURN),
-            _ => None,
-        };
-    }
-
-    match lower.as_str() {
-        "space" | "spacebar" => Some(VK_SPACE),
-        "esc" | "escape" => Some(VK_ESCAPE),
-        "enter" | "return" => Some(VK_RETURN),
-        "tab" => Some(VK_TAB),
-        "backspace" => Some(VK_BACK),
-        "delete" | "del" => Some(VK_DELETE),
-        "insert" | "ins" => Some(VK_INSERT),
-        "home" => Some(VK_HOME),
-        "end" => Some(VK_END),
-        "pageup" | "pgup" => Some(VK_PRIOR),
-        "pagedown" | "pgdn" => Some(VK_NEXT),
-        "up" | "arrowup" => Some(VK_UP),
-        "down" | "arrowdown" => Some(VK_DOWN),
-        "left" | "arrowleft" => Some(VK_LEFT),
-        "right" | "arrowright" => Some(VK_RIGHT),
-        "capslock" => Some(VK_CAPITAL),
-        "pause" | "pausebreak" => Some(VK_PAUSE),
-        "printscreen" | "prtsc" => Some(VK_SNAPSHOT),
-        "minus" => Some(VK_OEM_MINUS),
-        "equal" => Some(VK_OEM_PLUS),
-        "bracketleft" => Some(VK_OEM_4),
-        "bracketright" => Some(VK_OEM_6),
-        "backslash" => Some(VK_OEM_5),
-        "semicolon" => Some(VK_OEM_1),
-        "quote" => Some(VK_OEM_7),
-        "comma" => Some(VK_OEM_COMMA),
-        "period" => Some(VK_OEM_PERIOD),
-        "slash" => Some(VK_OEM_2),
-        "backquote" => Some(VK_OEM_3),
-        _ => None,
-    }
-}
-
-pub struct HotkeyManager {
-    bindings: Arc<Mutex<Vec<HotkeyBinding>>>,
-    recording_paused: Arc<AtomicBool>,
+pub struct WindowsHotkeyBackend {
     hwnd_raw: Arc<AtomicIsize>,
     pump_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
-impl HotkeyManager {
+impl WindowsHotkeyBackend {
     pub fn new() -> Self {
         Self {
-            bindings: Arc::new(Mutex::new(Vec::new())),
-            recording_paused: Arc::new(AtomicBool::new(false)),
             hwnd_raw: Arc::new(AtomicIsize::new(0)),
             pump_thread: Mutex::new(None),
         }
     }
 
-    pub fn start<F>(&self, on_action: F)
-    where
+    pub fn start<F>(
+        &self,
+        bindings: Arc<Mutex<Vec<HotkeyBinding>>>,
+        paused: Arc<AtomicBool>,
+        on_action: F,
+    ) where
         F: Fn(HotkeyAction) + Send + 'static,
     {
         if self.pump_thread.lock().is_some() {
@@ -366,10 +266,7 @@ impl HotkeyManager {
             })
             .ok();
 
-        let bindings = Arc::clone(&self.bindings);
-        let paused = Arc::clone(&self.recording_paused);
         let hwnd_raw = Arc::clone(&self.hwnd_raw);
-
         let handle = std::thread::Builder::new()
             .name("memeboard-rawinput-hotkeys".to_string())
             .spawn(move || {
@@ -380,38 +277,8 @@ impl HotkeyManager {
         *self.pump_thread.lock() = handle;
     }
 
-    pub fn update_bindings(
-        &self,
-        panic_hotkey: &str,
-        overlay_hotkey: &str,
-        sound_hotkeys: &[(String, String)],
-    ) {
-        let mut next = Vec::with_capacity(sound_hotkeys.len() + 2);
-        if let Some(combo) = parse_hotkey(panic_hotkey) {
-            next.push(HotkeyBinding {
-                combo,
-                action: HotkeyAction::Panic,
-            });
-        }
-        if let Some(combo) = parse_hotkey(overlay_hotkey) {
-            next.push(HotkeyBinding {
-                combo,
-                action: HotkeyAction::ToggleOverlay,
-            });
-        }
-        for (sound_id, hk) in sound_hotkeys {
-            if let Some(combo) = parse_hotkey(hk) {
-                next.push(HotkeyBinding {
-                    combo,
-                    action: HotkeyAction::TriggerSound(sound_id.clone()),
-                });
-            }
-        }
-        *self.bindings.lock() = next;
-    }
-
-    pub fn set_recording_paused(&self, paused: bool) {
-        self.recording_paused.store(paused, Ordering::Release);
+    pub fn update_bindings(&self, _bindings: &[HotkeyBinding]) {
+        // Raw Input reads directly from shared Arc<Mutex<Vec<HotkeyBinding>>>
     }
 
     pub fn shutdown(&self) {
@@ -424,12 +291,6 @@ impl HotkeyManager {
         if let Some(handle) = self.pump_thread.lock().take() {
             let _ = handle.join();
         }
-    }
-}
-
-impl Drop for HotkeyManager {
-    fn drop(&mut self) {
-        self.shutdown();
     }
 }
 
@@ -495,13 +356,14 @@ unsafe extern "system" fn raw_input_wnd_proc(
                 );
                 if read != u32::MAX && read > 0 && (read as usize) <= buf.len() {
                     if let Some(kb) = parse_raw_keyboard_bytes(&buf[..read as usize]) {
-                        let is_break = (kb.Flags as u32 & 0x0001) != 0; // RI_KEY_BREAK
-                        let is_e0 = (kb.Flags as u32 & 0x0002) != 0; // RI_KEY_E0
+                        let is_break = (kb.Flags as u32 & 0x0001) != 0;
+                        let is_e0 = (kb.Flags as u32 & 0x0002) != 0;
                         let is_down = |vk: u16| (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
                         LOOP_CTX.with(|cell| {
                             if let Some(ctx) = cell.borrow_mut().as_mut() {
-                                if !is_break && !is_modifier_vkey(resolve_vkey(kb.VKey, kb.MakeCode, is_e0)) {
-                                    // Recover from missed key-up events across Win+L / UAC secure desktop
+                                if !is_break
+                                    && !is_modifier_vkey(resolve_vkey(kb.VKey, kb.MakeCode, is_e0))
+                                {
                                     ctx.kb_state.sync_modifiers(
                                         is_down(VK_CONTROL),
                                         is_down(VK_SHIFT),
@@ -510,14 +372,19 @@ unsafe extern "system" fn raw_input_wnd_proc(
                                         is_down(VK_RWIN),
                                     );
                                 }
-                                if let Some(combo) =
+                                if let Some(ev) =
                                     ctx.kb_state
                                         .process_event(kb.VKey, kb.MakeCode, is_break, is_e0)
                                 {
                                     if !ctx.paused.load(Ordering::Acquire) {
                                         let bindings = ctx.bindings.lock();
                                         for b in bindings.iter() {
-                                            if b.combo == combo {
+                                            if b.combo.ctrl == ev.ctrl
+                                                && b.combo.shift == ev.shift
+                                                && b.combo.alt == ev.alt
+                                                && b.combo.super_key == ev.super_key
+                                                && combo_matches_vkey(&b.combo, ev.vkey, ev.is_e0)
+                                            {
                                                 let _ = ctx.action_tx.send(b.action.clone());
                                             }
                                         }
@@ -535,6 +402,7 @@ unsafe extern "system" fn raw_input_wnd_proc(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+#[allow(dead_code)]
 pub struct SingleInstanceGuard(HANDLE);
 
 impl Drop for SingleInstanceGuard {
@@ -549,12 +417,12 @@ impl Drop for SingleInstanceGuard {
 
 /// Acquires single-instance GUI lock; if another Memeboard instance is already running
 /// (including minimized to System Tray), activates its main window and returns `None`.
+#[allow(dead_code)]
 pub fn acquire_single_instance_or_activate() -> Option<SingleInstanceGuard> {
     let mutex_name = wide("Local\\MemeboardGuiSingleInstance_v1");
     unsafe {
         let handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
         if handle.is_null() {
-            // Unexpected OS failure: allow startup rather than blocking the app
             return Some(SingleInstanceGuard(std::ptr::null_mut()));
         }
         if GetLastError() == ERROR_ALREADY_EXISTS {
@@ -638,8 +506,8 @@ fn run_raw_input_loop(
         }
 
         let rid = RAWINPUTDEVICE {
-            usUsagePage: 0x01, // Generic Desktop Controls
-            usUsage: 0x06,     // Keyboard
+            usUsagePage: 0x01,
+            usUsage: 0x06,
             dwFlags: RIDEV_INPUTSINK,
             hwndTarget: hwnd,
         };
@@ -673,131 +541,39 @@ fn run_raw_input_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_hotkey_handles_modifiers_functions_numpad_and_punctuation() {
-        assert_eq!(
-            parse_hotkey("Control+Shift+X"),
-            Some(HotkeyCombo {
-                ctrl: true,
-                shift: true,
-                alt: false,
-                super_key: false,
-                vkey: b'X' as u16,
-            })
-        );
-        assert_eq!(
-            parse_hotkey("F12"),
-            Some(HotkeyCombo {
-                ctrl: false,
-                shift: false,
-                alt: false,
-                super_key: false,
-                vkey: VK_F12,
-            })
-        );
-        assert_eq!(
-            parse_hotkey("Alt+Numpad5"),
-            Some(HotkeyCombo {
-                ctrl: false,
-                shift: false,
-                alt: true,
-                super_key: false,
-                vkey: VK_NUMPAD5,
-            })
-        );
-        assert_eq!(
-            parse_hotkey("Space"),
-            Some(HotkeyCombo {
-                ctrl: false,
-                shift: false,
-                alt: false,
-                super_key: false,
-                vkey: VK_SPACE,
-            })
-        );
-        assert!(parse_hotkey("").is_none());
-        assert!(parse_hotkey("InvalidKeyName123").is_none());
-        assert_eq!(
-            parse_hotkey("Control+Shift+Equal"),
-            Some(HotkeyCombo {
-                ctrl: true,
-                shift: true,
-                alt: false,
-                super_key: false,
-                vkey: VK_OEM_PLUS,
-            })
-        );
-        assert_eq!(
-            parse_hotkey("Control++"),
-            Some(HotkeyCombo {
-                ctrl: true,
-                shift: false,
-                alt: false,
-                super_key: false,
-                vkey: VK_OEM_PLUS,
-            })
-        );
-    }
+    use crate::hotkeys::parser::parse_hotkey;
 
     #[test]
     fn keyboard_state_suppresses_repeat_and_tracks_modifiers() {
         let mut kb = KeyboardState::new();
-        // Press LControl + LShift + X
         assert!(kb.process_event(0x11, 0x1D, false, false).is_none());
         assert!(kb.process_event(0x10, 0x2A, false, false).is_none());
-        let trigger = kb.process_event(b'X' as u16, 0x2D, false, false);
-        assert_eq!(
-            trigger,
-            Some(HotkeyCombo {
-                ctrl: true,
-                shift: true,
-                alt: false,
-                super_key: false,
-                vkey: b'X' as u16,
-            })
-        );
-        // Key repeat while held must be ignored
+        let trigger = kb.process_event(b'X' as u16, 0x2D, false, false).unwrap();
+        assert!(trigger.ctrl && trigger.shift && !trigger.alt && !trigger.super_key);
+        let parsed = parse_hotkey("Control+Shift+X").unwrap();
+        assert!(combo_matches_vkey(&parsed, trigger.vkey, trigger.is_e0));
+
         assert!(kb.process_event(b'X' as u16, 0x2D, false, false).is_none());
-        // Key up clears state so subsequent press triggers again
         assert!(kb.process_event(b'X' as u16, 0x2D, true, false).is_none());
         assert!(kb.process_event(b'X' as u16, 0x2D, false, false).is_some());
-        // Release modifiers and verify clean state
+
         kb.process_event(b'X' as u16, 0x2D, true, false);
         kb.process_event(0x10, 0x2A, true, false);
         kb.process_event(0x11, 0x1D, true, false);
-        assert_eq!(
-            kb.process_event(b'X' as u16, 0x2D, false, false),
-            Some(HotkeyCombo {
-                ctrl: false,
-                shift: false,
-                alt: false,
-                super_key: false,
-                vkey: b'X' as u16,
-            })
-        );
+        let clean = kb.process_event(b'X' as u16, 0x2D, false, false).unwrap();
+        assert!(!clean.ctrl && !clean.shift && !clean.alt && !clean.super_key);
     }
 
     #[test]
     fn keyboard_state_sync_modifiers_recovers_after_lock_screen() {
         let mut kb = KeyboardState::new();
-        // Simulate Win key pressed before Win+L (release never received across lock screen)
         assert!(kb.process_event(VK_LWIN, 0x5B, false, true).is_none());
         assert!(kb.super_key());
 
-        // User unlocks and presses X; OS reports Win key is no longer held
         kb.sync_modifiers(false, false, false, false, false);
         assert!(!kb.super_key());
-        assert_eq!(
-            kb.process_event(b'X' as u16, 0x2D, false, false),
-            Some(HotkeyCombo {
-                ctrl: false,
-                shift: false,
-                alt: false,
-                super_key: false,
-                vkey: b'X' as u16,
-            })
-        );
+        let ev = kb.process_event(b'X' as u16, 0x2D, false, false).unwrap();
+        assert!(!ev.super_key && ev.vkey == b'X' as u16);
     }
 
     #[test]

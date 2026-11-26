@@ -13,7 +13,7 @@ import {
   Wrench,
   RotateCcw,
 } from 'lucide-react';
-import { AudioDevicesResult, AudioSettings, VirtualMicStatus } from '../types';
+import { AudioDevicesResult, AudioSettings, PlatformInfo, VirtualMicStatus } from '../types';
 import { api } from '../services/api';
 import { formatKeyboardCombo } from '../utils/hotkeys';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
@@ -35,6 +35,7 @@ interface AudioSettingsModalProps {
   onSetAutoSwitchMic: (enabled: boolean) => void;
   onRestoreOriginalMic: () => void;
   isInstallingDriver: boolean;
+  platformInfo?: PlatformInfo;
 }
 
 export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
@@ -49,6 +50,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
   onSetAutoSwitchMic,
   onRestoreOriginalMic,
   isInstallingDriver,
+  platformInfo,
 }) => {
   const [localSettings, setLocalSettings] = useState<AudioSettings>(settings);
   const [activeTab, setActiveTab] = useState('routing');
@@ -186,7 +188,13 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
                         disabled={isInstallingDriver}
                       >
                         <Wrench className="w-3 h-3" />
-                        <span>{isInstallingDriver ? 'Wait...' : 'Setup'}</span>
+                        <span>
+                          {isInstallingDriver
+                            ? 'Wait...'
+                            : platformInfo?.os === 'linux'
+                              ? 'Retry'
+                              : 'Setup'}
+                        </span>
                       </Button>
                     )}
                   </div>
@@ -421,8 +429,11 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
 
             <TabsContent value="hotkeys" className="space-y-3 pb-4">
               <p className="text-[10px] text-zinc-400 bg-zinc-900 border border-zinc-800 rounded-md p-2.5">
-                Non-consuming Raw Input pass-through hooks work globally inside games without
-                blocking Esc or F-keys.
+                {platformInfo?.os === 'linux'
+                  ? platformInfo.sessionType === 'wayland'
+                    ? 'Wayland uses xdg-desktop-portal GlobalShortcuts where supported. For non-consuming in-game keys and floating overlay positioning, X11 is recommended—or bind DE shortcuts to memeboard --stop-all / --toggle-overlay / --trigger <id>.'
+                    : 'Non-consuming X11 (XInput2) hooks work globally inside apps and games without blocking Esc or F-keys.'
+                  : 'Non-consuming Raw Input pass-through hooks work globally inside games without blocking Esc or F-keys.'}
               </p>
 
               <div className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-between gap-3">

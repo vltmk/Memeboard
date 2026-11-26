@@ -20,6 +20,44 @@ pub struct AppState {
     pub hotkeys: Arc<HotkeyManager>,
     pub board_state: Mutex<SoundboardState>,
     pub overlay_visible: AtomicBool,
+    pub tray_available: AtomicBool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformInfo {
+    pub os: &'static str,
+    pub session_type: &'static str,
+}
+
+#[tauri::command]
+pub fn get_platform_info() -> PlatformInfo {
+    #[cfg(windows)]
+    {
+        PlatformInfo {
+            os: "windows",
+            session_type: "win32",
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let session_type = if crate::hotkeys::linux::is_wayland_session() {
+            "wayland"
+        } else {
+            "x11"
+        };
+        PlatformInfo {
+            os: "linux",
+            session_type,
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        PlatformInfo {
+            os: std::env::consts::OS,
+            session_type: "unknown",
+        }
+    }
 }
 
 pub fn sync_hotkeys_from_state(state: &AppState) {
@@ -192,8 +230,24 @@ pub fn is_window_docked_bottom_right(window: &tauri::WebviewWindow) -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = window;
-        true
+        let Ok(Some(monitor)) = window
+            .current_monitor()
+            .or_else(|_| window.primary_monitor())
+        else {
+            return true;
+        };
+        let Ok(win_pos) = window.outer_position() else {
+            return true;
+        };
+        let Ok(win_size) = window.outer_size() else {
+            return true;
+        };
+        let work = monitor.work_area();
+        let right = work.position.x + work.size.width as i32;
+        let bottom = work.position.y + work.size.height as i32;
+        let win_right = win_pos.x + win_size.width as i32;
+        let win_bottom = win_pos.y + win_size.height as i32;
+        (win_right - right).abs() <= 16 && (win_bottom - bottom).abs() <= 16
     }
 }
 
@@ -248,7 +302,24 @@ pub fn dock_window_bottom_right(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (window, margin_right, margin_bottom);
+        if let Ok(Some(monitor)) = window
+            .current_monitor()
+            .or_else(|_| window.primary_monitor())
+        {
+            if let Ok(win_size) = window.outer_size() {
+                let work = monitor.work_area();
+                let scale = monitor.scale_factor();
+                let mr = (margin_right as f64 * scale).round() as i32;
+                let mb = (margin_bottom as f64 * scale).round() as i32;
+                let w = (win_size.width as i32).max(1);
+                let h = (win_size.height as i32).max(1);
+                let x = (work.position.x + work.size.width as i32 - w - mr).max(work.position.x);
+                let y = (work.position.y + work.size.height as i32 - h - mb).max(work.position.y);
+                let _ = window.set_position(tauri::Position::Physical(
+                    tauri::PhysicalPosition::new(x, y),
+                ));
+            }
+        }
     }
 }
 

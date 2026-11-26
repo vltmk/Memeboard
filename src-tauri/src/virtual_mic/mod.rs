@@ -7,6 +7,9 @@ pub mod usbip;
 #[cfg(windows)]
 pub mod windows_svc;
 
+#[cfg(target_os = "linux")]
+pub mod linux_audio;
+
 use parking_lot::Mutex;
 use serde::Serialize;
 
@@ -30,7 +33,11 @@ pub struct VirtualMicStatus {
 pub struct VirtualMicManager {
     #[cfg(windows)]
     in_process: Mutex<Option<InProcessVirtualCable>>,
+    #[cfg(target_os = "linux")]
+    linux: linux_audio::LinuxVirtualMic,
+    #[cfg(windows)]
     last_error: Mutex<Option<String>>,
+    #[cfg(windows)]
     snapshot: Mutex<Option<policy::MicRestoreState>>,
 }
 
@@ -39,15 +46,17 @@ impl VirtualMicManager {
         Self {
             #[cfg(windows)]
             in_process: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            linux: linux_audio::LinuxVirtualMic::new(),
+            #[cfg(windows)]
             last_error: Mutex::new(None),
+            #[cfg(windows)]
             snapshot: Mutex::new(None),
         }
     }
 
-    /// Starts the built-in virtual microphone device (via Windows service when installed,
-    /// or elevated helper fallback if driver is present in portable/dev mode), waits briefly
-    /// for WASAPI endpoints, guards default playback, and optionally switches Windows Default
-    /// Recording & Communications microphone.
+    /// Starts the built-in virtual microphone device, waits briefly for OS endpoints,
+    /// guards default playback, and optionally switches the OS default microphone.
     pub fn startup(&self, auto_switch_default_mic: bool) {
         #[cfg(windows)]
         {
@@ -82,7 +91,6 @@ impl VirtualMicManager {
                 match try_svc() {
                     Ok(v) => v,
                     Err(first_err) => {
-                        // Self-heal if service stayed Running from a prior failed attach attempt
                         if svc_state == ServiceState::Running {
                             let _ = stop_installed_service();
                             match try_svc() {
@@ -99,7 +107,6 @@ impl VirtualMicManager {
                     }
                 }
             } else {
-                // Portable/dev mode without service installed: check if already attached or run in-process
                 match InProcessVirtualCable::start() {
                     Ok(cable) => {
                         *self.in_process.lock() = Some(cable);
@@ -114,7 +121,6 @@ impl VirtualMicManager {
 
             if attached_ok {
                 *self.last_error.lock() = None;
-                // Wait up to ~8s for Windows usbaudio2.sys + AudioEndpointBuilder to register BOTH capture & render endpoints
                 for _ in 0..80 {
                     policy::guard_playback_defaults(&snap);
                     let cap_ready = policy::enumerate_active_endpoints(true)
@@ -138,7 +144,6 @@ impl VirtualMicManager {
                     }
                 }
 
-                // Delayed playback guard in case Windows PnP evaluates speaker policy 400ms later
                 let snap_delayed = snap.clone();
                 std::thread::spawn(move || {
                     for delay in [250, 500, 1000] {
@@ -148,7 +153,11 @@ impl VirtualMicManager {
                 });
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.startup(auto_switch_default_mic);
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = auto_switch_default_mic;
         }
@@ -164,6 +173,10 @@ impl VirtualMicManager {
             if query_service_state() != ServiceState::NotInstalled {
                 let _ = stop_installed_service();
             }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.shutdown();
         }
     }
 
@@ -182,7 +195,11 @@ impl VirtualMicManager {
             }
             Ok(())
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.set_auto_switch(enabled)
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = enabled;
             Ok(())
@@ -196,10 +213,14 @@ impl VirtualMicManager {
             self.startup(auto_switch_default_mic);
             Ok(self.status())
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.install_driver(auto_switch_default_mic)
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = auto_switch_default_mic;
-            Err("Built-in virtual driver installation is only supported on Windows.".into())
+            Err("Built-in virtual driver installation is not supported on this OS.".into())
         }
     }
 
@@ -242,7 +263,11 @@ impl VirtualMicManager {
                 status_message,
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.status()
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             VirtualMicStatus {
                 driver_installed: false,
@@ -250,27 +275,29 @@ impl VirtualMicManager {
                 virtual_device_attached: false,
                 virtual_mic_is_default: false,
                 saved_physical_mic: None,
-                status_message: "Not on Windows".to_string(),
+                status_message: "Unsupported platform".to_string(),
             }
         }
     }
 }
 
-/// Handles `--service` or `--attach-broker` CLI invocations before GUI startup.
-/// Returns `Some(exit_code)` if this invocation was a service/broker helper.
+/// Handles CLI helper invocations (`--service`, `--restore-mic`, `--prepare-uninstall`,
+/// `--attach-broker`) before GUI startup. Returns `Some(exit_code)` if handled.
 pub fn maybe_run_helper_mode() -> Option<i32> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.iter().any(|a| a == "--restore-mic") {
+        return Some(if policy::restore_original_mic().is_ok() {
+            0
+        } else {
+            1
+        });
+    }
+
     #[cfg(windows)]
     {
-        let args: Vec<String> = std::env::args().skip(1).collect();
         if args.iter().any(|a| a == "--service") {
             return Some(if windows_svc::run_windows_service().is_ok() {
-                0
-            } else {
-                1
-            });
-        }
-        if args.iter().any(|a| a == "--restore-mic") {
-            return Some(if policy::restore_original_mic().is_ok() {
                 0
             } else {
                 1

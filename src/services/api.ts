@@ -4,6 +4,7 @@ import {
   AudioDevicesResult,
   AudioPlaybackStatus,
   PackImportResult,
+  PlatformInfo,
   SoundItem,
   SoundboardState,
   VirtualMicStatus,
@@ -216,6 +217,10 @@ export const api = {
 
   async setAutoSwitchMic(enabled: boolean): Promise<VirtualMicStatus> {
     return await invoke<VirtualMicStatus>('set_auto_switch_mic', { enabled });
+  },
+
+  async getPlatformInfo(): Promise<PlatformInfo> {
+    return await invoke<PlatformInfo>('get_platform_info');
   },
 
   async restoreOriginalMic(): Promise<VirtualMicStatus> {
