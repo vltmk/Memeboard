@@ -1,5 +1,9 @@
+#[cfg(not(target_os = "linux"))]
 use crate::audio_thread::{AudioThread, enter_audio_thread};
+#[cfg(not(target_os = "linux"))]
 use crate::mixer::{AudioMixer, CHANNELS, SAMPLE_RATE, StreamProcessor};
+#[cfg(target_os = "linux")]
+use crate::mixer::{AudioMixer, CHANNELS, StreamProcessor};
 #[cfg(not(target_os = "linux"))]
 use crate::types::{AudioDevice, AudioDevicesResult};
 #[cfg(target_os = "linux")]
@@ -10,8 +14,14 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(not(target_os = "linux"))]
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use parking_lot::Mutex;
+#[cfg(not(target_os = "linux"))]
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
+#[cfg(target_os = "linux")]
+use ringbuf::traits::{Consumer, Observer, Producer};
+#[cfg(not(target_os = "linux"))]
 use ringbuf::{HeapCons, HeapProd, HeapRb};
+#[cfg(target_os = "linux")]
+use ringbuf::{HeapCons, HeapProd};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };

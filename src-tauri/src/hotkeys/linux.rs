@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event as XEvent;
-use x11rb::protocol::xinput::{self, ConnectionExt as _, XIEventMask};
+use x11rb::protocol::xinput::{self, XIEventMask};
 use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use xkbcommon::xkb::{self, keysyms};
 
@@ -14,7 +14,6 @@ pub fn is_wayland_session() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
 }
 
-#[derive(Default)]
 struct ModifierTracker {
     ctrl_l: bool,
     ctrl_r: bool,
@@ -25,6 +24,22 @@ struct ModifierTracker {
     super_l: bool,
     super_r: bool,
     pressed_keycodes: [bool; 256],
+}
+
+impl Default for ModifierTracker {
+    fn default() -> Self {
+        Self {
+            ctrl_l: false,
+            ctrl_r: false,
+            shift_l: false,
+            shift_r: false,
+            alt_l: false,
+            alt_r: false,
+            super_l: false,
+            super_r: false,
+            pressed_keycodes: [false; 256],
+        }
+    }
 }
 
 impl ModifierTracker {

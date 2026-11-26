@@ -271,7 +271,7 @@ impl ActiveStreams {
 }
 
 pub struct LinuxAudioHolder {
-    session: Option<PulseSession>,
+    session: Option<Rc<PulseSession>>,
     streams: ActiveStreams,
     hotplug_tx: Option<Sender<HotplugEvent>>,
     pub(crate) snapshot: DeviceSnapshot,
@@ -291,15 +291,15 @@ impl LinuxAudioHolder {
         }
     }
 
-    fn ensure_session(&mut self) -> Result<&PulseSession, String> {
+    fn ensure_session(&mut self) -> Result<Rc<PulseSession>, String> {
         let needs_reconnect = self.session.as_ref().is_none_or(|s| !s.is_ready());
         if needs_reconnect {
             if let Some(old) = self.session.take() {
                 self.streams.stop(&old.mainloop);
             }
-            self.session = Some(PulseSession::connect(self.hotplug_tx.clone())?);
+            self.session = Some(Rc::new(PulseSession::connect(self.hotplug_tx.clone())?));
         }
-        Ok(self.session.as_ref().unwrap())
+        Ok(Rc::clone(self.session.as_ref().unwrap()))
     }
 
     pub fn get_audio_devices(&mut self) -> Result<AudioDevicesResult, String> {
@@ -389,7 +389,7 @@ impl LinuxAudioHolder {
 
         // 1. Physical microphone capture
         if let Some(ep) = resolve_input(&sources, def_src.as_deref(), input_id.as_deref()) {
-            match start_mic_stream(session, &ep.id, mic_prod) {
+            match start_mic_stream(&session, &ep.id, mic_prod) {
                 Ok(stream) => {
                     self.snapshot.active_input_id = Some(ep.id);
                     self.streams.mic_stream = Some(stream);
@@ -407,7 +407,7 @@ impl LinuxAudioHolder {
         if let Some(ep) = resolve_broadcast(&sinks, broadcast_id.as_deref()) {
             let processor = mixer.create_broadcast_processor();
             match start_broadcast_stream(
-                session,
+                &session,
                 &ep.id,
                 processor,
                 mic_cons,
@@ -440,7 +440,7 @@ impl LinuxAudioHolder {
             self.snapshot.active_broadcast_id.as_deref(),
         ) {
             let processor = mixer.create_monitor_processor();
-            match start_monitor_stream(session, &ep.id, processor) {
+            match start_monitor_stream(&session, &ep.id, processor) {
                 Ok(stream) => {
                     self.snapshot.active_monitor_id = Some(ep.id);
                     self.streams.monitor_stream = Some(stream);
@@ -574,7 +574,7 @@ fn resolve_monitor(
 
 fn audio_spec() -> Spec {
     Spec {
-        format: Format::SAMPLE_FLOAT32NE,
+        format: Format::FLOAT32NE,
         channels: CHANNELS as u8,
         rate: SAMPLE_RATE,
     }
@@ -627,7 +627,7 @@ fn start_mic_stream(
 
     session.mainloop.borrow_mut().lock();
     let stream = Rc::new(RefCell::new(
-        Stream::new(&session.context.borrow(), "Memeboard Mic Capture", &spec, None)
+        Stream::new(&mut session.context.borrow_mut(), "Memeboard Mic Capture", &spec, None)
             .ok_or_else(|| "Failed to allocate PulseAudio capture stream".to_string())?,
     ));
 
@@ -698,7 +698,7 @@ fn start_broadcast_stream(
 
     session.mainloop.borrow_mut().lock();
     let stream = Rc::new(RefCell::new(
-        Stream::new(&session.context.borrow(), "Memeboard Virtual Mic Mix", &spec, None)
+        Stream::new(&mut session.context.borrow_mut(), "Memeboard Virtual Mic Mix", &spec, None)
             .ok_or_else(|| "Failed to allocate PulseAudio broadcast stream".to_string())?,
     ));
 
@@ -765,7 +765,7 @@ fn start_monitor_stream(
 
     session.mainloop.borrow_mut().lock();
     let stream = Rc::new(RefCell::new(
-        Stream::new(&session.context.borrow(), "Memeboard Headphones Monitor", &spec, None)
+        Stream::new(&mut session.context.borrow_mut(), "Memeboard Headphones Monitor", &spec, None)
             .ok_or_else(|| "Failed to allocate PulseAudio monitor stream".to_string())?,
     ));
 

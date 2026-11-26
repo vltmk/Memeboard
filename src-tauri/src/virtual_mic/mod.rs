@@ -10,6 +10,7 @@ pub mod windows_svc;
 #[cfg(target_os = "linux")]
 pub mod linux_audio;
 
+#[cfg(windows)]
 use parking_lot::Mutex;
 use serde::Serialize;
 

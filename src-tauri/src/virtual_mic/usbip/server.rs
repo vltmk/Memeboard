@@ -195,7 +195,7 @@ impl Server {
         writer: Box<dyn Write + Send>,
         device: Arc<Device>,
     ) {
-        let _audio_thread = crate::virtual_mic::windows_svc::enter_audio_thread();
+        let _audio_thread = crate::audio_thread::enter_audio_thread();
         let state = Arc::new(ConnState::new(writer));
         let control_event = Event::new();
         let mut workers: HashMap<u32, EndpointWorker> = HashMap::new();
@@ -722,7 +722,7 @@ impl EndpointWorker {
 
 impl WorkerShared {
     fn run(&self, server: &Server, state: &ConnState, device: &Device) {
-        let _audio_thread = crate::virtual_mic::windows_svc::enter_audio_thread();
+        let _audio_thread = crate::audio_thread::enter_audio_thread();
         loop {
             let job = lock(&self.queue).pop_front();
             let Some(mut job) = job else {
