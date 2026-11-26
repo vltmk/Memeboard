@@ -362,7 +362,7 @@ impl LinuxAudioHolder {
         Ok((resolved_in, resolved_bcast, resolved_mon))
     }
 
-    pub fn restart_streams(
+    pub(crate) fn restart_streams(
         &mut self,
         mixer: Arc<AudioMixer>,
         input_id: Option<String>,
