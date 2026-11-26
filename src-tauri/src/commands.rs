@@ -234,6 +234,11 @@ pub fn set_ducking_settings(state: State<'_, AppState>, enabled: bool, ducking_d
 }
 
 #[tauri::command]
+pub fn set_aec_safe_monitor(state: State<'_, AppState>, enabled: bool) {
+    state.mixer.controls.set_aec_safe_monitor(enabled);
+}
+
+#[tauri::command]
 pub fn get_playback_status(state: State<'_, AppState>) -> AudioPlaybackStatus {
     let (mic_stream_active, last_audio_error) = {
         let dm = state.device_manager.lock();
@@ -347,6 +352,10 @@ pub fn save_soundboard_state(
         new_state.settings.voice_ducking_enabled,
         new_state.settings.voice_ducking_db,
     );
+    state
+        .mixer
+        .controls
+        .set_aec_safe_monitor(new_state.settings.aec_safe_monitor);
 
     if new_state.settings.schema_version == 0 {
         new_state.settings.schema_version = 1;

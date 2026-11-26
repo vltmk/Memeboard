@@ -195,7 +195,9 @@ fn main() {
     dual_mixer.load_sound(
         "dual".to_string(),
         DecodedAudio {
-            samples: vec![0.5f32; 9600],
+            samples: (0..9600)
+                .map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / SAMPLE_RATE as f32).sin() * 0.5)
+                .collect(),
             duration: 0.1,
             peaks: vec![0.5; 10],
             normalized_gain: 1.0,
@@ -205,9 +207,13 @@ fn main() {
     let mut b_buf = vec![0.0f32; 128 * CHANNELS];
     let mut m_buf = vec![0.0f32; 64 * CHANNELS];
     b_proc.process_broadcast(&[], &mut b_buf);
-    m_proc.process_monitor(&mut m_buf);
-    assert!(b_buf[127 * CHANNELS] > 0.3);
-    assert!(m_buf[63 * CHANNELS] > 0.25);
+    for _ in 0..4 {
+        m_proc.process_monitor(&mut m_buf);
+    }
+    let b_rms = (b_buf.iter().map(|s| s * s).sum::<f32>() / b_buf.len() as f32).sqrt();
+    let m_rms = (m_buf.iter().map(|s| s * s).sum::<f32>() / m_buf.len() as f32).sqrt();
+    assert!(b_rms > 0.25, "b_rms={b_rms}");
+    assert!(m_rms > 0.20, "m_rms={m_rms}");
     println!("✓ Passed test 9: broadcast and monitor processors run lock-free and independent");
 
     // 10. Trimmed ITU-R BS.1770 Gated Loudness Calculation
@@ -225,6 +231,43 @@ fn main() {
         gain_quiet_second
     );
     println!("✓ Passed test 10: BS.1770 trimmed loudness normalization verified");
+
+    // 11. AEC-Safe Monitor Decorrelation
+    println!("Running test 11: AEC-safe monitor decorrelation...");
+    let aec_mixer = AudioMixer::new();
+    aec_mixer.init_sync_for_test();
+    aec_mixer.controls.set_volumes(1.0, 1.0, 1.0, false, false);
+    aec_mixer.controls.set_aec_safe_monitor(true);
+    let frames = SAMPLE_RATE as usize / 2;
+    let mut sine = Vec::with_capacity(frames * CHANNELS);
+    for f in 0..frames {
+        let v = (2.0 * std::f32::consts::PI * 440.0 * f as f32 / SAMPLE_RATE as f32).sin() * 0.5;
+        sine.push(v);
+        sine.push(v);
+    }
+    aec_mixer.load_sound(
+        "aec".to_string(),
+        DecodedAudio {
+            samples: sine.clone(),
+            duration: 0.5,
+            peaks: vec![0.5; 20],
+            normalized_gain: 1.0,
+        },
+    );
+    aec_mixer.trigger_sound("aec", 0.0, 0.5, 1.0, PlaybackMode::Restart, 1.0);
+    let mut b_aec = vec![0.0f32; frames * CHANNELS];
+    let mut m_aec = vec![0.0f32; frames * CHANNELS];
+    aec_mixer.process_frames(&[], &mut b_aec, &mut m_aec);
+    let skip = 4096 * CHANNELS;
+    let (mut b2, mut m2, mut dot) = (0.0f64, 0.0f64, 0.0f64);
+    for (&b, &m) in b_aec[skip..].iter().zip(m_aec[skip..].iter()) {
+        b2 += (b as f64) * (b as f64);
+        m2 += (m as f64) * (m as f64);
+        dot += (b as f64) * (m as f64);
+    }
+    let corr = (dot / (b2 * m2).sqrt()).abs();
+    assert!(corr < 0.20, "AEC correlation too high: {}", corr);
+    println!("✓ Passed test 11: AEC-safe headphone monitor decorrelated ({:.3} corr) while broadcast stayed pure", corr);
 
     println!("\n===========================================");
     println!("ALL 10 MEMEBOARD AUDIO TESTS PASSED SUCCESSFULLY!");

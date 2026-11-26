@@ -15,9 +15,9 @@ use commands::{
     AppState, delete_sound, get_audio_devices, get_overlay_visibility, get_playback_status,
     get_virtual_mic_status, import_sound_file, install_virtual_driver, load_soundboard_state,
     play_sound, play_sound_internal, preview_sound, restore_original_mic, save_soundboard_state,
-    set_audio_devices, set_auto_switch_mic, set_ducking_settings, set_hotkey_recording,
-    set_volumes, stop_all_sounds, stop_preview, stop_sound, sync_hotkeys_from_state,
-    toggle_overlay_window, toggle_overlay_window_internal,
+    set_aec_safe_monitor, set_audio_devices, set_auto_switch_mic, set_ducking_settings,
+    set_hotkey_recording, set_volumes, stop_all_sounds, stop_preview, stop_sound,
+    sync_hotkeys_from_state, toggle_overlay_window, toggle_overlay_window_internal,
 };
 use device_manager::DeviceManager;
 use hotkeys::{HotkeyAction, HotkeyManager};
@@ -84,6 +84,9 @@ pub fn run() {
         initial_state.settings.voice_ducking_enabled,
         initial_state.settings.voice_ducking_db,
     );
+    mixer
+        .controls
+        .set_aec_safe_monitor(initial_state.settings.aec_safe_monitor);
 
     // Preload sound waveforms/samples asynchronously after UI opens
     state_manager.spawn_preload_all(initial_state.clone(), Arc::clone(&mixer));
@@ -260,6 +263,7 @@ pub fn run() {
             stop_all_sounds,
             set_volumes,
             set_ducking_settings,
+            set_aec_safe_monitor,
             get_playback_status,
             import_sound_file,
             delete_sound,

@@ -84,6 +84,10 @@ export const api = {
     return await invoke('set_ducking_settings', { enabled, duckingDb });
   },
 
+  async setAecSafeMonitor(enabled: boolean): Promise<void> {
+    return await invoke('set_aec_safe_monitor', { enabled });
+  },
+
   async getPlaybackStatus(): Promise<AudioPlaybackStatus> {
     return await invoke<AudioPlaybackStatus>('get_playback_status');
   },

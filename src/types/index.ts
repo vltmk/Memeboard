@@ -49,6 +49,7 @@ export interface AudioSettings {
   panicHotkey: string;
   overlayHotkey: string;
   autoSwitchDefaultMic: boolean;
+  aecSafeMonitor: boolean;
 }
 
 export interface SoundboardState {

@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: AudioSettings = {
   panicHotkey: 'Control+Shift+X',
   overlayHotkey: 'Control+Shift+S',
   autoSwitchDefaultMic: true,
+  aecSafeMonitor: true,
 };
 
 const DEFAULT_PLAYBACK_STATUS: AudioPlaybackStatus = {

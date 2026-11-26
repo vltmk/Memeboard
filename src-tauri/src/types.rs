@@ -58,6 +58,10 @@ fn default_auto_switch() -> bool {
     true
 }
 
+fn default_aec_safe_monitor() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSettings {
@@ -78,6 +82,8 @@ pub struct AudioSettings {
     pub overlay_hotkey: String,
     #[serde(default = "default_auto_switch")]
     pub auto_switch_default_mic: bool,
+    #[serde(default = "default_aec_safe_monitor")]
+    pub aec_safe_monitor: bool,
 }
 
 impl Default for AudioSettings {
@@ -98,6 +104,7 @@ impl Default for AudioSettings {
             panic_hotkey: "Control+Shift+X".to_string(),
             overlay_hotkey: "Control+Shift+S".to_string(),
             auto_switch_default_mic: true,
+            aec_safe_monitor: true,
         }
     }
 }

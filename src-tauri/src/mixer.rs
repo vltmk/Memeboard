@@ -70,6 +70,7 @@ pub struct SharedMixerControls {
     broadcast_muted: AtomicBool,
     voice_ducking_enabled: AtomicBool,
     voice_ducking_db_bits: AtomicU32,
+    aec_safe_monitor: AtomicBool,
 
     pub is_mic_active: AtomicBool,
     pub broadcast_stream_active: AtomicBool,
@@ -90,6 +91,7 @@ impl SharedMixerControls {
             broadcast_muted: AtomicBool::new(false),
             voice_ducking_enabled: AtomicBool::new(true),
             voice_ducking_db_bits: AtomicU32::new((-10.0f32).to_bits()),
+            aec_safe_monitor: AtomicBool::new(true),
             is_mic_active: AtomicBool::new(false),
             broadcast_stream_active: AtomicBool::new(false),
             monitor_stream_active: AtomicBool::new(false),
@@ -128,6 +130,10 @@ impl SharedMixerControls {
     pub fn voice_ducking_db(&self) -> f32 {
         f32::from_bits(self.voice_ducking_db_bits.load(Ordering::Relaxed))
     }
+    #[inline]
+    pub fn aec_safe_monitor(&self) -> bool {
+        self.aec_safe_monitor.load(Ordering::Relaxed)
+    }
 
     pub fn set_volumes(
         &self,
@@ -152,6 +158,112 @@ impl SharedMixerControls {
         self.voice_ducking_db_bits
             .store(ducking_db.clamp(-30.0, 0.0).to_bits(), Ordering::Relaxed);
     }
+
+    pub fn set_aec_safe_monitor(&self, enabled: bool) {
+        self.aec_safe_monitor.store(enabled, Ordering::Relaxed);
+    }
+}
+
+const HILBERT_COEFFS_A: [f32; 4] = [
+    0.6923878,
+    0.9360654322959,
+    0.9882295226860,
+    0.9987488452737,
+];
+const HILBERT_COEFFS_B: [f32; 4] = [
+    0.4021921162426,
+    0.8561710882420,
+    0.9722909545651,
+    0.9952884791278,
+];
+const AEC_SHIFT_HZ: f64 = 7.0;
+
+#[derive(Clone, Copy, Default)]
+struct AllpassStage {
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl AllpassStage {
+    #[inline]
+    fn process(&mut self, coeff: f32, input: f32) -> f32 {
+        let output = coeff * (input + self.y2) - self.x2;
+        self.x2 = self.x1;
+        self.x1 = input;
+        self.y2 = self.y1;
+        self.y1 = output;
+        output
+    }
+}
+
+#[derive(Clone, Default)]
+struct ChannelHilbert {
+    chain_a: [AllpassStage; 4],
+    chain_b: [AllpassStage; 4],
+    delay_a: f32,
+}
+
+impl ChannelHilbert {
+    #[inline]
+    fn process_iq(&mut self, input: f32) -> (f32, f32) {
+        let mut a = input;
+        for (stage, &coeff) in self.chain_a.iter_mut().zip(HILBERT_COEFFS_A.iter()) {
+            a = stage.process(coeff, a);
+        }
+        let i_out = self.delay_a;
+        self.delay_a = a;
+
+        let mut b = input;
+        for (stage, &coeff) in self.chain_b.iter_mut().zip(HILBERT_COEFFS_B.iter()) {
+            b = stage.process(coeff, b);
+        }
+        (i_out, b)
+    }
+}
+
+/// Zero-allocation +7 Hz single-sideband phase-decorrelating shifter applied strictly to the
+/// local headphone monitor so linear Acoustic Echo Cancellation (TeamSpeak/Discord/WebRTC AEC)
+/// cannot lock onto and cancel soundboard clips.
+struct StereoHilbertShifter {
+    left: ChannelHilbert,
+    right: ChannelHilbert,
+    phase: f64,
+    phase_step: f64,
+}
+
+impl StereoHilbertShifter {
+    fn new() -> Self {
+        Self {
+            left: ChannelHilbert::default(),
+            right: ChannelHilbert::default(),
+            phase: 0.0,
+            phase_step: (2.0 * std::f64::consts::PI * AEC_SHIFT_HZ) / (SAMPLE_RATE as f64),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.left = ChannelHilbert::default();
+        self.right = ChannelHilbert::default();
+        self.phase = 0.0;
+    }
+
+    #[inline]
+    fn process_frame(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let (il, ql) = self.left.process_iq(l);
+        let (ir, qr) = self.right.process_iq(r);
+
+        let c = self.phase.cos() as f32;
+        let s = self.phase.sin() as f32;
+
+        self.phase += self.phase_step;
+        if self.phase >= 2.0 * std::f64::consts::PI {
+            self.phase -= 2.0 * std::f64::consts::PI;
+        }
+
+        (il * c - ql * s, ir * c - qr * s)
+    }
 }
 
 /// Real-time lock-free processor state owned exclusively by one audio stream thread.
@@ -166,6 +278,9 @@ pub struct StreamProcessor {
     voice_detected: bool,
     voice_hold_remaining: usize,
     current_ducking_gain: f32,
+
+    // Headphone-only AEC decorrelator (used by monitor processor)
+    aec_shifter: StereoHilbertShifter,
 }
 
 impl StreamProcessor {
@@ -184,6 +299,7 @@ impl StreamProcessor {
             voice_detected: false,
             voice_hold_remaining: 0,
             current_ducking_gain: 1.0,
+            aec_shifter: StereoHilbertShifter::new(),
         }
     }
 
@@ -480,6 +596,8 @@ impl StreamProcessor {
             self.controls.monitor_volume()
         };
 
+        let has_broadcast_clip = self.active_clips.iter().any(|c| !c.preview_only);
+
         for clip in self.active_clips.iter_mut() {
             let Some((_, sound_audio)) = self.loaded_sounds.get(&clip.sound_id) else {
                 clip.pos = clip.end_pos;
@@ -503,9 +621,24 @@ impl StreamProcessor {
         self.active_clips.retain(|c| c.pos < c.end_pos);
         self.publish_status();
 
-        for frame in 0..frames_count {
-            monitor_out[frame * 2] = soft_peak_limiter(monitor_out[frame * 2] * mon_gain);
-            monitor_out[frame * 2 + 1] = soft_peak_limiter(monitor_out[frame * 2 + 1] * mon_gain);
+        let apply_aec_shift =
+            mon_gain > 0.0 && self.controls.aec_safe_monitor() && has_broadcast_clip;
+        if apply_aec_shift {
+            for frame in 0..frames_count {
+                let (sl, sr) = self
+                    .aec_shifter
+                    .process_frame(monitor_out[frame * 2], monitor_out[frame * 2 + 1]);
+                monitor_out[frame * 2] = soft_peak_limiter(sl * mon_gain);
+                monitor_out[frame * 2 + 1] = soft_peak_limiter(sr * mon_gain);
+            }
+        } else {
+            if self.active_clips.is_empty() {
+                self.aec_shifter.reset();
+            }
+            for frame in 0..frames_count {
+                monitor_out[frame * 2] = soft_peak_limiter(monitor_out[frame * 2] * mon_gain);
+                monitor_out[frame * 2 + 1] = soft_peak_limiter(monitor_out[frame * 2 + 1] * mon_gain);
+            }
         }
     }
 
@@ -973,5 +1106,64 @@ mod tests {
         mixer.process_frames(&quiet_mic, &mut bcast2, &mut mon2);
         assert!(mixer.controls.is_mic_active.load(Ordering::Relaxed));
         assert!(bcast2[0] < 0.045);
+    }
+
+    #[test]
+    fn test_aec_safe_monitor_decorrelates_without_altering_broadcast() {
+        let mixer = AudioMixer::new();
+        mixer.init_sync_for_test();
+        mixer.controls.set_volumes(1.0, 1.0, 1.0, false, false);
+        mixer.controls.set_aec_safe_monitor(true);
+
+        let frames = SAMPLE_RATE as usize / 2; // 0.5s 440 Hz tone
+        let mut samples = Vec::with_capacity(frames * CHANNELS);
+        for f in 0..frames {
+            let v = (2.0 * std::f32::consts::PI * 440.0 * f as f32 / SAMPLE_RATE as f32).sin() * 0.5;
+            samples.push(v);
+            samples.push(v);
+        }
+        mixer.load_sound(
+            "sine440".into(),
+            DecodedAudio {
+                samples: samples.clone(),
+                duration: 0.5,
+                peaks: vec![0.5; 20],
+                normalized_gain: 1.0,
+            },
+        );
+        mixer.trigger_sound("sine440", 0.0, 0.5, 1.0, PlaybackMode::Restart, 1.0);
+
+        let mut bcast = vec![0.0f32; frames * CHANNELS];
+        let mut mon = vec![0.0f32; frames * CHANNELS];
+        mixer.process_frames(&[], &mut bcast, &mut mon);
+
+        // Broadcast remains bit-exact to original 440 Hz sound
+        let max_bcast_err = samples
+            .iter()
+            .zip(bcast.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(max_bcast_err < 1e-5, "Broadcast altered: {max_bcast_err}");
+
+        // Monitor preserves full RMS loudness while decorrelating linearly from broadcast
+        let skip = 4096 * CHANNELS;
+        let mut b_sq = 0.0f64;
+        let mut m_sq = 0.0f64;
+        let mut dot = 0.0f64;
+        for (&b, &m) in bcast[skip..].iter().zip(mon[skip..].iter()) {
+            b_sq += (b as f64) * (b as f64);
+            m_sq += (m as f64) * (m as f64);
+            dot += (b as f64) * (m as f64);
+        }
+        let rms_ratio = (m_sq / b_sq).sqrt();
+        let norm_corr = (dot / (b_sq * m_sq).sqrt()).abs();
+        assert!(
+            (rms_ratio - 1.0).abs() < 0.08,
+            "Monitor RMS drifted unexpectedly: {rms_ratio}"
+        );
+        assert!(
+            norm_corr < 0.20,
+            "Expected linear AEC decorrelation < 0.20, got {norm_corr}"
+        );
     }
 }

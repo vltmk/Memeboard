@@ -117,6 +117,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
     api
       .setDuckingSettings(settings.voiceDuckingEnabled, settings.voiceDuckingDb)
       .catch(() => {});
+    api.setAecSafeMonitor(settings.aecSafeMonitor).catch(() => {});
     onClose();
   };
 
@@ -171,7 +172,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
                 : 'border-transparent text-[#949ba4] hover:text-[#dbdee1]'
             }`}
           >
-            Voice Ducking &amp; LUFS
+            DSP, Ducking &amp; AEC
           </button>
           <button
             type="button"
@@ -499,6 +500,69 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
                 <p className="text-[11px] text-[#949ba4]">
                   Recomputes gated loudness across every trimmed clip automatically when saved.
                 </p>
+              </div>
+
+              {/* AEC-Safe Monitor Decorrelation */}
+              <div className="pt-4 border-t border-[#232428] space-y-3">
+                <div className="flex items-center justify-between p-4 rounded-xl bg-[#2b2d31] border border-[#232428] gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      AEC-Safe Headphone Monitor
+                      <span className="px-1.5 py-0.5 rounded bg-[#5865f2]/20 text-[#99aab5] text-[10px] font-mono">
+                        +7 Hz Phase Shift
+                      </span>
+                    </h3>
+                    <p className="text-xs text-[#949ba4] mt-0.5 leading-relaxed">
+                      Subtly phase-decorrelates <strong>only your headphones</strong> so TeamSpeak/Discord Echo
+                      Cancellation can&apos;t lock onto and erase clips. Virtual Mic broadcast stays 100% pure.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !localSettings.aecSafeMonitor;
+                      setLocalSettings({ ...localSettings, aecSafeMonitor: next });
+                      api.setAecSafeMonitor(next).catch(() => {});
+                    }}
+                    className={`w-12 h-6 rounded-full transition-colors p-0.5 shrink-0 ${
+                      localSettings.aecSafeMonitor ? 'bg-[#23a55a]' : 'bg-[#35373c]'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${
+                        localSettings.aecSafeMonitor ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Voice Chat Setup Checklist */}
+                <div className="p-4 rounded-xl bg-[#1e1f22] border border-[#35373c]/60 space-y-2">
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 text-[#f0b232]" />
+                    Voice Chat Audio Checklist (Prevent Cut-Off Clips)
+                  </h4>
+                  <p className="text-[11px] text-[#949ba4]">
+                    When wearing headphones, Echo Reduction and AI noise suppressors treat soundboard clips as background noise. Disable these in your voice app for full quality:
+                  </p>
+                  <ul className="text-[11px] text-[#dbdee1] space-y-1 pl-1">
+                    <li>
+                      <strong className="text-white">TeamSpeak:</strong> Options → Capture → uncheck{' '}
+                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#f0b232]">Echo cancellation</code>,{' '}
+                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#f0b232]">Echo reduction</code>, and set{' '}
+                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#f0b232]">Remove background noise</code> Off/Low.
+                    </li>
+                    <li>
+                      <strong className="text-white">Discord:</strong> Voice &amp; Video → turn{' '}
+                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#5865f2]">Echo Cancellation</code> Off and switch{' '}
+                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#5865f2]">Noise Suppression</code> off Krisp.
+                    </li>
+                    <li>
+                      <strong className="text-white">Google Meet:</strong> Settings → Audio → turn{' '}
+                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#23a55a]">Noise cancellation</code> Off.
+                    </li>
+                  </ul>
+                </div>
               </div>
             </div>
           )}
