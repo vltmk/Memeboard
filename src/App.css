@@ -1,5 +1,27 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Ioskeley Mono';
+  src: url('./assets/fonts/IoskeleyMono-Regular.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IRANYekanWeb';
+  src: url('./assets/fonts/iranyekanweblight.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200D;
+}
+
+@theme {
+  --font-sans: 'Inter Variable', 'Inter', 'IRANYekanWeb', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'Ioskeley Mono', 'IRANYekanWeb', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 @layer base {
   html,
   body,
@@ -8,9 +30,10 @@
     padding: 0;
     height: 100%;
     overflow: hidden;
-    background-color: transparent;
+    background-color: transparent !important;
+    color-scheme: dark;
     color: #fafafa;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     user-select: none;
     -webkit-user-select: none;
@@ -37,6 +60,72 @@
 
 .animate-in.fade-in {
   animation: modalFadeIn 0.14s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes dockDrawerIn {
+  from {
+    opacity: 0.72;
+    transform: translate3d(8px, 16px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.animate-dock-in {
+  animation: dockDrawerIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes liveBreath {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.75);
+    opacity: 0;
+  }
+}
+
+@keyframes voiceRipple {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes eqBar {
+  0%, 100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.live-halo {
+  animation: liveBreath 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.voice-ripple {
+  animation: voiceRipple 1.25s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.voice-eq-1 {
+  animation: eqBar 0.65s ease-in-out infinite;
+}
+
+.voice-eq-2 {
+  animation: eqBar 0.52s ease-in-out 0.15s infinite;
+}
+
+.voice-eq-3 {
+  animation: eqBar 0.72s ease-in-out 0.28s infinite;
 }
 
 ::-webkit-scrollbar {

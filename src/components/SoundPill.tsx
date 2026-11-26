@@ -12,6 +12,7 @@ interface SoundPillProps {
   onStopBroadcast: (sound: SoundItem) => void;
   onLocalPreview: (sound: SoundItem) => void;
   onEdit?: (sound: SoundItem) => void;
+  onContextMenu?: (sound: SoundItem, x: number, y: number) => void;
 }
 
 export const SoundPill: React.FC<SoundPillProps> = ({
@@ -23,6 +24,7 @@ export const SoundPill: React.FC<SoundPillProps> = ({
   onStopBroadcast,
   onLocalPreview,
   onEdit,
+  onContextMenu,
 }) => {
   const handlePillClick = () => {
     if (isPlaying && sound.playbackMode === 'stop') {
@@ -33,9 +35,14 @@ export const SoundPill: React.FC<SoundPillProps> = ({
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
-    if (!onEdit) return;
-    e.preventDefault();
-    onEdit(sound);
+    if (onContextMenu) {
+      e.preventDefault();
+      e.stopPropagation();
+      onContextMenu(sound, e.clientX, e.clientY);
+    } else if (onEdit) {
+      e.preventDefault();
+      onEdit(sound);
+    }
   };
 
   const handleLocalPlayClick = (e: React.MouseEvent) => {
@@ -56,9 +63,11 @@ export const SoundPill: React.FC<SoundPillProps> = ({
         }
       }}
       title={
-        onEdit
-          ? `${sound.name}${sound.hotkey ? ` (${sound.hotkey})` : ''} — Click: Broadcast • ▷: Listen locally • Right-click: Edit`
-          : `${sound.name}${sound.hotkey ? ` (${sound.hotkey})` : ''} — Click: Broadcast • ▷: Listen locally`
+        onContextMenu
+          ? `${sound.name}${sound.hotkey ? ` (${sound.hotkey})` : ''} — Click: Broadcast • ▷: Listen locally • Right-click: Menu`
+          : onEdit
+            ? `${sound.name}${sound.hotkey ? ` (${sound.hotkey})` : ''} — Click: Broadcast • ▷: Listen locally • Right-click: Edit`
+            : `${sound.name}${sound.hotkey ? ` (${sound.hotkey})` : ''} — Click: Broadcast • ▷: Listen locally`
       }
       className={cn(
         'group inline-flex items-center gap-1.5 rounded-full border select-none transition-all cursor-pointer max-w-full',
@@ -70,7 +79,10 @@ export const SoundPill: React.FC<SoundPillProps> = ({
     >
       <span className="text-sm leading-none shrink-0">{sound.emoji || '🔊'}</span>
 
-      <span className={cn('font-medium truncate', compact ? 'max-w-[82px]' : 'max-w-[110px]')}>
+      <span
+        dir="auto"
+        className={cn('font-medium truncate', compact ? 'max-w-[82px]' : 'max-w-[114px]')}
+      >
         {sound.name}
       </span>
 

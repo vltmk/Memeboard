@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
-import { Square, X, GripHorizontal, Radio } from 'lucide-react';
+import { Square, X, GripHorizontal } from 'lucide-react';
 import { SoundItem } from '../types';
 import { api, isTauriEnvironment } from '../services/api';
+import { BrandIcon } from './BrandIcon';
 import { SoundPill } from './SoundPill';
 import { Button } from './ui/button';
 
@@ -104,7 +105,7 @@ export const OverlayView: React.FC = () => {
   };
 
   return (
-    <div className="w-screen h-screen bg-zinc-950/95 backdrop-blur-md border border-zinc-800 rounded-xl flex flex-col overflow-hidden shadow-2xl select-none">
+    <div className="w-screen h-screen bg-zinc-950/95 border border-zinc-800/90 rounded-xl flex flex-col overflow-hidden select-none">
       {/* Compact Monochromatic Drag Header */}
       <div
         data-tauri-drag-region
@@ -112,7 +113,7 @@ export const OverlayView: React.FC = () => {
       >
         <div className="flex items-center gap-1.5 pointer-events-none">
           <GripHorizontal className="w-3 h-3 text-zinc-500" />
-          <Radio className="w-3 h-3 text-zinc-200" />
+          <BrandIcon className="w-3.5 h-3.5 text-zinc-200" />
           <span className="text-[11px] font-semibold text-zinc-100 tracking-tight">
             Memeboard
           </span>

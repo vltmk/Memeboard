@@ -100,7 +100,7 @@ impl Default for AudioSettings {
             broadcast_muted: false,
             voice_ducking_enabled: true,
             voice_ducking_db: -10.0,
-            loudness_target_lufs: -14.0,
+            loudness_target_lufs: -16.0,
             panic_hotkey: "Control+Shift+X".to_string(),
             overlay_hotkey: "Control+Shift+S".to_string(),
             auto_switch_default_mic: true,
@@ -114,6 +114,42 @@ impl Default for AudioSettings {
 pub struct SoundboardState {
     pub sounds: Vec<SoundItem>,
     pub settings: AudioSettings,
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackSoundTemplate {
+    pub name: String,
+    pub emoji: String,
+    pub category: String,
+    pub volume: f32,
+    pub hotkey: Option<String>,
+    pub trim_start: f32,
+    pub trim_end: f32,
+    pub playback_mode: PlaybackMode,
+    pub audio_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemeboardPackManifest {
+    pub format_version: u32,
+    pub app: String,
+    pub exported_at: u64,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    pub sounds: Vec<PackSoundTemplate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackImportResult {
+    pub imported_sounds: Vec<SoundItem>,
+    pub imported_categories: Vec<String>,
+    pub skipped_count: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

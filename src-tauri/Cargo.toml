@@ -1,6 +1,6 @@
 [package]
 name = "memeboard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Memeboard - Discord-Style Microphone Soundboard"
 authors = ["Memeboard Authors"]
 edition = "2024"
@@ -28,6 +28,7 @@ parking_lot = "0.12"
 uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "6.0"
 socket2 = { version = "0.5", features = ["all"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"
@@ -44,6 +45,7 @@ windows = { version = "0.62", features = [
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Devices_HumanInterfaceDevice",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Media",
     "Win32_Security",

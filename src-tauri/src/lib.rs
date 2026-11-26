@@ -12,13 +12,14 @@ pub mod virtual_mic;
 unsafe extern "C" {}
 
 use commands::{
-    AppState, delete_sound, dock_main_window, dock_window_bottom_right, get_audio_devices,
-    get_overlay_visibility, get_playback_status, get_virtual_mic_status, import_sound_file,
-    install_virtual_driver, load_soundboard_state, play_sound, play_sound_internal, preview_sound,
-    restore_original_mic, save_soundboard_state, set_aec_safe_monitor, set_audio_devices,
-    set_auto_switch_mic, set_ducking_settings, set_hotkey_recording, set_volumes, stop_all_sounds,
-    stop_preview, stop_sound, sync_hotkeys_from_state, toggle_overlay_window,
-    toggle_overlay_window_internal,
+    AppState, bring_window_to_front, configure_frameless_window, delete_sound, dock_main_window,
+    dock_window_bottom_right, export_pack, export_sound_file, get_audio_devices,
+    get_overlay_visibility, get_playback_status, get_virtual_mic_status, import_pack,
+    import_sound_file, install_virtual_driver, is_main_docked, is_window_docked_bottom_right,
+    load_soundboard_state, play_sound, play_sound_internal, preview_sound, restore_original_mic,
+    save_soundboard_state, set_aec_safe_monitor, set_audio_devices, set_auto_switch_mic,
+    set_ducking_settings, set_hotkey_recording, set_volumes, stop_all_sounds, stop_preview,
+    stop_sound, sync_hotkeys_from_state, toggle_overlay_window, toggle_overlay_window_internal,
 };
 use device_manager::DeviceManager;
 use hotkeys::{HotkeyAction, HotkeyManager};
@@ -51,9 +52,12 @@ fn perform_clean_shutdown(app: &AppHandle) {
 
 fn show_main_window(app: &AppHandle) {
     if let Some(main_win) = app.get_webview_window("main") {
+        configure_frameless_window(&main_win);
         let _ = main_win.unminimize();
         let _ = main_win.show();
+        bring_window_to_front(&main_win);
         let _ = main_win.set_focus();
+        let _ = app.emit("main-shown", ());
     }
 }
 
@@ -70,6 +74,7 @@ pub fn run() {
         types::SoundboardState {
             sounds: Vec::new(),
             settings: types::AudioSettings::default(),
+            categories: Vec::new(),
         }
     });
 
@@ -123,10 +128,21 @@ pub fn run() {
             let handle = app.handle().clone();
 
             if let Some(main_win) = app.get_webview_window("main") {
-                dock_window_bottom_right(&main_win, 16);
+                configure_frameless_window(&main_win);
+                dock_window_bottom_right(&main_win, 0, 0);
+                let _ = main_win.show();
+                bring_window_to_front(&main_win);
+                let _ = main_win.set_focus();
+                eprintln!(
+                    "[Memeboard] Main window ready: visible={:?}, pos={:?}, size={:?}",
+                    main_win.is_visible(),
+                    main_win.outer_position(),
+                    main_win.outer_size()
+                );
             }
             if let Some(overlay_win) = app.get_webview_window("overlay") {
-                dock_window_bottom_right(&overlay_win, 16);
+                configure_frameless_window(&overlay_win);
+                dock_window_bottom_right(&overlay_win, 16, 16);
             }
 
             // 1. Start non-consuming Windows Raw Input global hotkey listener
@@ -241,11 +257,12 @@ pub fn run() {
                 tray_builder = tray_builder.icon(icon);
             }
             let _ = tray_builder.build(app)?;
+            eprintln!("[Memeboard] setup() complete; entering event loop");
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "main" {
                     // Close-to-tray so virtual mic + global hotkeys keep working cleanly
                     api.prevent_close();
@@ -260,6 +277,16 @@ pub fn run() {
                     let _ = app.emit("overlay-visibility", false);
                 }
             }
+            WindowEvent::Moved(_) => {
+                if window.label() == "main" {
+                    let app = window.app_handle();
+                    if let Some(main_win) = app.get_webview_window("main") {
+                        let docked = is_window_docked_bottom_right(&main_win);
+                        let _ = app.emit("main-dock-changed", docked);
+                    }
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             get_audio_devices,
@@ -274,12 +301,16 @@ pub fn run() {
             set_aec_safe_monitor,
             get_playback_status,
             import_sound_file,
+            export_sound_file,
+            export_pack,
+            import_pack,
             delete_sound,
             load_soundboard_state,
             save_soundboard_state,
             toggle_overlay_window,
             get_overlay_visibility,
             dock_main_window,
+            is_main_docked,
             set_hotkey_recording,
             get_virtual_mic_status,
             install_virtual_driver,

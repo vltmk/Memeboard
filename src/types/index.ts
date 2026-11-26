@@ -55,6 +55,14 @@ export interface AudioSettings {
 export interface SoundboardState {
   sounds: SoundItem[];
   settings: AudioSettings;
+  categories?: string[];
+}
+
+export interface PackImportResult {
+  importedSounds: SoundItem[];
+  importedCategories: string[];
+  skippedCount: number;
+  warnings: string[];
 }
 
 export interface AudioPlaybackStatus {

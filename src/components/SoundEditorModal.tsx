@@ -9,6 +9,7 @@ import {
   RotateCcw,
   Tag,
   Headphones,
+  Download,
 } from 'lucide-react';
 import { SoundItem, PlaybackMode } from '../types';
 import { drawWaveform } from '../utils/audio';
@@ -26,6 +27,7 @@ interface SoundEditorModalProps {
   onClose: () => void;
   onSave: (updated: SoundItem) => void;
   onDelete: (sound: SoundItem) => void;
+  onDownload: (sound: SoundItem) => void;
 }
 
 const EMOJI_PRESETS = [
@@ -43,6 +45,7 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
   onClose,
   onSave,
   onDelete,
+  onDownload,
 }) => {
   const [name, setName] = useState('');
   const [emoji, setEmoji] = useState('🔊');
@@ -302,6 +305,7 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
                 Name
               </label>
               <Input
+                dir="auto"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Clip name"
@@ -313,17 +317,31 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
                 <Tag className="w-2.5 h-2.5" /> Category
               </label>
               <Input
-                list="memeboard-categories"
+                dir="auto"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 placeholder="General"
               />
-              <datalist id="memeboard-categories">
-                {allCategories.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
             </div>
+          </div>
+
+          <div className="flex items-center gap-1 flex-wrap -mt-1.5">
+            {allCategories.map((c) => (
+              <button
+                key={c}
+                type="button"
+                dir="auto"
+                onClick={() => setCategory(c)}
+                className={cn(
+                  'px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors cursor-pointer',
+                  category.trim().toLowerCase() === c.toLowerCase()
+                    ? 'bg-zinc-100 text-zinc-950 border-zinc-100'
+                    : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-100'
+                )}
+              >
+                {c}
+              </button>
+            ))}
           </div>
 
           {/* Emoji Picker */}
@@ -492,18 +510,29 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/60 border-t border-zinc-800 shrink-0">
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={() => {
-              stopPreview();
-              onDelete(sound);
-              onClose();
-            }}
-          >
-            <Trash2 className="w-3.5 h-3.5" /> Delete
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                stopPreview();
+                onDelete(sound);
+                onClose();
+              }}
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onDownload(sound)}
+              title="Download audio file"
+            >
+              <Download className="w-3.5 h-3.5" /> Download
+            </Button>
+          </div>
 
           <div className="flex items-center gap-1.5">
             <Button

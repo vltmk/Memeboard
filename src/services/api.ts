@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import {
   AudioDevicesResult,
   AudioPlaybackStatus,
+  PackImportResult,
   SoundItem,
   SoundboardState,
   VirtualMicStatus,
@@ -125,6 +126,60 @@ export const api = {
 
   async deleteSound(soundId: string, filePath: string): Promise<void> {
     return await invoke('delete_sound', { soundId, filePath });
+  },
+
+  async exportSoundFile(soundId: string, destPath: string): Promise<void> {
+    return await invoke('export_sound_file', { soundId, destPath });
+  },
+
+  async pickExportAudioPath(defaultName: string, extension: string): Promise<string | null> {
+    const ext = extension.replace(/^\./, '').toLowerCase() || 'wav';
+    const cleanName = defaultName.replace(/[<>:"/\\|?*]/g, '_').trim() || 'sound';
+    const selected = await save({
+      title: 'Download Audio File',
+      defaultPath: `${cleanName}.${ext}`,
+      filters: [{ name: `${ext.toUpperCase()} Audio`, extensions: [ext] }],
+    });
+    return selected ?? null;
+  },
+
+  async exportPack(destPath: string, categoryFilter?: string | null): Promise<number> {
+    return await invoke<number>('export_pack', {
+      destPath,
+      categoryFilter: categoryFilter ?? null,
+    });
+  },
+
+  async pickExportPackPath(defaultName: string): Promise<string | null> {
+    const cleanName = defaultName.replace(/[<>:"/\\|?*]/g, '_').trim() || 'memeboard-pack';
+    const selected = await save({
+      title: 'Export Memeboard Pack',
+      defaultPath: `${cleanName}.memeboard`,
+      filters: [
+        { name: 'Memeboard Pack (*.memeboard, *.zip)', extensions: ['memeboard', 'zip'] },
+      ],
+    });
+    return selected ?? null;
+  },
+
+  async importPack(packPath: string): Promise<PackImportResult> {
+    return await invoke<PackImportResult>('import_pack', { packPath });
+  },
+
+  async pickImportPackPath(): Promise<string | null> {
+    const selected = await open({
+      multiple: false,
+      title: 'Import Memeboard Pack or ZIP',
+      filters: [
+        { name: 'Memeboard Pack & ZIP', extensions: ['memeboard', 'zip'] },
+      ],
+    });
+    if (!selected) return null;
+    return Array.isArray(selected) ? selected[0] ?? null : selected;
+  },
+
+  async isMainDocked(): Promise<boolean> {
+    return await invoke<boolean>('is_main_docked');
   },
 
   async loadSoundboardState(): Promise<SoundboardState> {

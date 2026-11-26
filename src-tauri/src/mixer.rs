@@ -528,7 +528,7 @@ impl StreamProcessor {
         let bcast_gain = if self.controls.broadcast_muted() {
             0.0
         } else {
-            self.controls.broadcast_volume()
+            perceptual_volume_gain(self.controls.broadcast_volume())
         };
 
         // 2. Mix active soundboard clips into broadcast_out
@@ -593,7 +593,7 @@ impl StreamProcessor {
         let mon_gain = if self.controls.monitor_muted() {
             0.0
         } else {
-            self.controls.monitor_volume()
+            perceptual_volume_gain(self.controls.monitor_volume())
         };
 
         let has_broadcast_clip = self.active_clips.iter().any(|c| !c.preview_only);
@@ -660,6 +660,18 @@ fn blend_preserving_voice(mic: f32, sound: f32) -> f32 {
         let headroom = (ceiling - m.abs()).max(0.0);
         let s_capped = sound.clamp(-headroom, headroom);
         (m + s_capped).clamp(-ceiling, ceiling)
+    }
+}
+
+/// Perceptual quadratic audio taper for `0.0..=1.0` so lowering the volume slider
+/// produces natural decibel attenuation (`50%` = `-12 dB`), while keeping `100%` at unity.
+#[inline]
+pub fn perceptual_volume_gain(vol: f32) -> f32 {
+    let v = vol.clamp(0.0, 2.0);
+    if v <= 1.0 {
+        v * v
+    } else {
+        v
     }
 }
 
@@ -1165,5 +1177,12 @@ mod tests {
             norm_corr < 0.20,
             "Expected linear AEC decorrelation < 0.20, got {norm_corr}"
         );
+    }
+
+    #[test]
+    fn test_perceptual_volume_taper_preserves_unity_and_attenuates_mid_slider() {
+        assert!((perceptual_volume_gain(1.0) - 1.0).abs() < 1e-6);
+        assert!((perceptual_volume_gain(0.5) - 0.25).abs() < 1e-6);
+        assert!((perceptual_volume_gain(0.0) - 0.0).abs() < 1e-6);
     }
 }

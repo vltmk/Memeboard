@@ -4,7 +4,7 @@ use crate::hotkeys::HotkeyManager;
 use crate::mixer::AudioMixer;
 use crate::state_manager::StateManager;
 use crate::types::{
-    AudioDevicesResult, AudioPlaybackStatus, SoundItem, SoundboardState,
+    AudioDevicesResult, AudioPlaybackStatus, PackImportResult, SoundItem, SoundboardState,
 };
 use crate::virtual_mic::{VirtualMicManager, VirtualMicStatus};
 use parking_lot::Mutex;
@@ -66,7 +66,142 @@ pub fn play_sound_internal(state: &AppState, sound_id: &str) -> Result<(), Strin
     Ok(())
 }
 
-pub fn dock_window_bottom_right(window: &tauri::WebviewWindow, margin: i32) {
+pub fn configure_frameless_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
+        };
+
+        const DWMWCP_DONOTROUND: u32 = 1;
+        const DWMWCP_ROUNDSMALL: u32 = 3;
+        const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+        const ZINC_800_COLORREF: u32 = 0x002A_2727; // #27272A in 0x00BBGGRR
+
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+            let is_overlay = window.label() == "overlay";
+            unsafe {
+                let corner = if is_overlay {
+                    DWMWCP_DONOTROUND
+                } else {
+                    DWMWCP_ROUNDSMALL
+                };
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                    (&corner as *const u32).cast(),
+                    std::mem::size_of::<u32>() as u32,
+                );
+                let border = if is_overlay {
+                    DWMWA_COLOR_NONE
+                } else {
+                    ZINC_800_COLORREF
+                };
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_BORDER_COLOR as u32,
+                    (&border as *const u32).cast(),
+                    std::mem::size_of::<u32>() as u32,
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
+}
+
+pub fn bring_window_to_front(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            HWND_NOTOPMOST, HWND_TOPMOST, SW_SHOW, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+            SetForegroundWindow, SetWindowPos, ShowWindow,
+        };
+
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+            unsafe {
+                ShowWindow(hwnd, SW_SHOW);
+                // Temporarily toggle TOPMOST -> NOTOPMOST so Windows surfaces the newly
+                // launched dev window above an active full-screen terminal/IDE.
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+                SetWindowPos(
+                    hwnd,
+                    HWND_NOTOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+                SetForegroundWindow(hwnd);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+pub fn is_window_docked_bottom_right(window: &tauri::WebviewWindow) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowRect, SPI_GETWORKAREA, SystemParametersInfoW,
+        };
+
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+            unsafe {
+                let mut work = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                let mut win_rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                if SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0)
+                    != 0
+                    && GetWindowRect(hwnd, &mut win_rect) != 0
+                {
+                    return (win_rect.right - work.right).abs() <= 14
+                        && (win_rect.bottom - work.bottom).abs() <= 14;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        true
+    }
+}
+
+pub fn dock_window_bottom_right(
+    window: &tauri::WebviewWindow,
+    margin_right: i32,
+    margin_bottom: i32,
+) {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::Foundation::RECT;
@@ -95,8 +230,8 @@ pub fn dock_window_bottom_right(window: &tauri::WebviewWindow, margin: i32) {
                     if GetWindowRect(hwnd, &mut win_rect) != 0 {
                         let w = (win_rect.right - win_rect.left).max(1);
                         let h = (win_rect.bottom - win_rect.top).max(1);
-                        let x = (work.right - w - margin).max(work.left);
-                        let y = (work.bottom - h - margin).max(work.top);
+                        let x = (work.right - w - margin_right).max(work.left);
+                        let y = (work.bottom - h - margin_bottom).max(work.top);
                         SetWindowPos(
                             hwnd,
                             HWND_TOP,
@@ -113,7 +248,7 @@ pub fn dock_window_bottom_right(window: &tauri::WebviewWindow, margin: i32) {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (window, margin);
+        let _ = (window, margin_right, margin_bottom);
     }
 }
 
@@ -135,9 +270,10 @@ pub fn toggle_overlay_window_internal(app: &AppHandle) -> Result<bool, String> {
     } else {
         let _ = overlay.set_focusable(false);
         let _ = overlay.set_always_on_top(true);
-        dock_window_bottom_right(&overlay, 16);
+        configure_frameless_window(&overlay);
+        dock_window_bottom_right(&overlay, 16, 16);
         show_window_no_activate(&overlay)?;
-        dock_window_bottom_right(&overlay, 16);
+        dock_window_bottom_right(&overlay, 16, 16);
         state.overlay_visible.store(true, Ordering::Release);
         let _ = app.emit("overlay-visibility", true);
         Ok(true)
@@ -145,6 +281,8 @@ pub fn toggle_overlay_window_internal(app: &AppHandle) -> Result<bool, String> {
 }
 
 fn show_window_no_activate(window: &tauri::WebviewWindow) -> Result<(), String> {
+    configure_frameless_window(window);
+
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -182,8 +320,18 @@ fn show_window_no_activate(window: &tauri::WebviewWindow) -> Result<(), String> 
 #[tauri::command]
 pub fn dock_main_window(app: AppHandle) {
     if let Some(main_win) = app.get_webview_window("main") {
-        dock_window_bottom_right(&main_win, 16);
+        configure_frameless_window(&main_win);
+        dock_window_bottom_right(&main_win, 0, 0);
+        let _ = app.emit("main-dock-changed", true);
+        let _ = app.emit("main-docked", ());
     }
+}
+
+#[tauri::command]
+pub fn is_main_docked(app: AppHandle) -> bool {
+    app.get_webview_window("main")
+        .map(|w| is_window_docked_bottom_right(&w))
+        .unwrap_or(true)
 }
 
 #[tauri::command]
@@ -518,4 +666,77 @@ pub async fn restore_original_mic(
     state: State<'_, AppState>,
 ) -> Result<VirtualMicStatus, String> {
     set_auto_switch_mic(app, state, false).await
+}
+
+#[tauri::command]
+pub fn export_sound_file(
+    state: State<'_, AppState>,
+    sound_id: String,
+    dest_path: String,
+) -> Result<(), String> {
+    let file_path = {
+        let guard = state.board_state.lock();
+        guard
+            .sounds
+            .iter()
+            .find(|s| s.id == sound_id)
+            .map(|s| s.file_path.clone())
+            .ok_or_else(|| format!("Sound '{sound_id}' not found"))?
+    };
+    state.state_manager.export_sound_file(&file_path, &dest_path)
+}
+
+#[tauri::command]
+pub async fn export_pack(
+    state: State<'_, AppState>,
+    dest_path: String,
+    category_filter: Option<String>,
+) -> Result<usize, String> {
+    let snapshot = state.board_state.lock().clone();
+    let sm = Arc::clone(&state.state_manager);
+    tauri::async_runtime::spawn_blocking(move || {
+        sm.export_pack(&snapshot, &dest_path, category_filter.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Pack export task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn import_pack(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pack_path: String,
+) -> Result<PackImportResult, String> {
+    let target_lufs = state.board_state.lock().settings.loudness_target_lufs;
+    let sm = Arc::clone(&state.state_manager);
+    let mixer = Arc::clone(&state.mixer);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        sm.import_pack(&pack_path, target_lufs, &mixer)
+    })
+    .await
+    .map_err(|e| format!("Pack import task failed: {e}"))??;
+
+    if !result.imported_sounds.is_empty() || !result.imported_categories.is_empty() {
+        let snapshot = {
+            let mut guard = state.board_state.lock();
+            for item in result.imported_sounds.iter().rev() {
+                guard.sounds.insert(0, item.clone());
+            }
+            for cat in &result.imported_categories {
+                if !guard
+                    .categories
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(cat))
+                {
+                    guard.categories.push(cat.clone());
+                }
+            }
+            guard.clone()
+        };
+        state.state_manager.save_state(&snapshot)?;
+        sync_hotkeys_from_state(&state);
+        let _ = app.emit("soundboard-updated", ());
+    }
+
+    Ok(result)
 }
