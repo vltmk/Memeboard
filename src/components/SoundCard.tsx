@@ -114,7 +114,7 @@ export const SoundCard: React.FC<SoundCardProps> = ({
               <span>Playing</span>
             </div>
           ) : (
-            <div className="action-button p-1 rounded-full text-[#949ba4] group-hover:text-[#dbdee1] group-hover:bg-[#1e1f22] transition-colors">
+            <div className="p-1 rounded-full text-[#949ba4] group-hover:text-[#dbdee1] group-hover:bg-[#1e1f22] transition-colors">
               <Play className="w-3.5 h-3.5 fill-current" />
             </div>
           )}

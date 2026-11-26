@@ -259,7 +259,9 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
                       Auto-Switch Windows Default Mic While Open
                     </p>
                     <p className="text-[11px] text-[#949ba4]">
-                      Apps &amp; games using Default Mic get Memeboard automatically without touching your real mic settings
+                      Apps &amp; games using Default Mic get Memeboard automatically without touching your real mic settings.
+                      If TeamSpeak or a game was already open before Memeboard launched, reconnect once or select{' '}
+                      <strong className="text-[#dbdee1]">Memeboard Virtual Mic</strong> in that app.
                     </p>
                   </div>
                   <button
