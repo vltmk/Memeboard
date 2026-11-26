@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  X,
   Mic,
   Headphones,
   Radio,
@@ -17,6 +16,12 @@ import {
 import { AudioDevicesResult, AudioSettings, VirtualMicStatus } from '../types';
 import { api } from '../services/api';
 import { formatKeyboardCombo } from '../utils/hotkeys';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
+import { Button } from './ui/button';
+import { Slider } from './ui/slider';
+import { Switch } from './ui/switch';
+import { cn } from '../lib/utils';
 
 interface AudioSettingsModalProps {
   isOpen: boolean;
@@ -46,11 +51,10 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
   isInstallingDriver,
 }) => {
   const [localSettings, setLocalSettings] = useState<AudioSettings>(settings);
-  const [activeTab, setActiveTab] = useState<'routing' | 'ducking' | 'hotkeys'>('routing');
+  const [activeTab, setActiveTab] = useState('routing');
   const [recordingField, setRecordingField] = useState<'panic' | 'overlay' | null>(null);
   const wasOpenRef = useRef(false);
 
-  // Sync local draft ONLY on modal open transition so background updates don't wipe edits
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
       setLocalSettings(settings);
@@ -62,7 +66,6 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
     wasOpenRef.current = isOpen;
   }, [isOpen, settings]);
 
-  // Global keybind recorder (pauses Raw Input triggers while active)
   useEffect(() => {
     api.setHotkeyRecording(recordingField !== null).catch(() => {});
     if (!recordingField) return;
@@ -96,15 +99,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [recordingField]);
 
-  if (!isOpen) return null;
-
-  const handleSave = () => {
-    onSaveSettings(localSettings);
-    onClose();
-  };
-
   const handleCancel = () => {
-    // Revert any live-previewed volume/ducking adjustments back to persisted settings
     api
       .setVolumes(
         settings.micVolume,
@@ -126,526 +121,374 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({
   const physicalOutputs = devices.outputDevices.filter((d) => !d.isVirtual);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 select-none animate-in fade-in">
-      <div className="bg-[#313338] border border-[#232428] w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#232428] shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#5865f2] flex items-center justify-center shadow-md">
-              <Sliders className="w-5 h-5 text-white" />
-            </div>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleCancel();
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <div className="flex items-center gap-2 pr-6">
+            <Sliders className="w-4 h-4 text-zinc-200" />
             <div>
-              <h2 className="text-base font-bold text-white">Audio Routing, Virtual Mic &amp; DSP</h2>
-              <p className="text-xs text-[#949ba4]">
-                Keep your physical microphone pure while broadcasting sound effects seamlessly
-              </p>
+              <DialogTitle>Audio &amp; Hotkey Settings</DialogTitle>
+              <DialogDescription>Virtual mic routing, DSP &amp; global keybinds</DialogDescription>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#35373c] transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+        </DialogHeader>
 
-        {/* Tab Navigation */}
-        <div className="flex items-center gap-1 px-6 pt-3 border-b border-[#232428] bg-[#2b2d31]/50 text-xs font-semibold shrink-0">
-          <button
-            type="button"
-            onClick={() => setActiveTab('routing')}
-            className={`pb-2.5 px-3 border-b-2 transition-colors ${
-              activeTab === 'routing'
-                ? 'border-[#5865f2] text-white'
-                : 'border-transparent text-[#949ba4] hover:text-[#dbdee1]'
-            }`}
-          >
-            Virtual Mic &amp; Devices
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('ducking')}
-            className={`pb-2.5 px-3 border-b-2 transition-colors ${
-              activeTab === 'ducking'
-                ? 'border-[#5865f2] text-white'
-                : 'border-transparent text-[#949ba4] hover:text-[#dbdee1]'
-            }`}
-          >
-            DSP, Ducking &amp; AEC
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('hotkeys')}
-            className={`pb-2.5 px-3 border-b-2 transition-colors ${
-              activeTab === 'hotkeys'
-                ? 'border-[#5865f2] text-white'
-                : 'border-transparent text-[#949ba4] hover:text-[#dbdee1]'
-            }`}
-          >
-            Global Hotkeys
-          </button>
-        </div>
+        <div className="px-4 pt-3 overflow-y-auto flex-1">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="w-full grid grid-cols-3">
+              <TabsTrigger value="routing">Routing</TabsTrigger>
+              <TabsTrigger value="ducking">DSP &amp; AEC</TabsTrigger>
+              <TabsTrigger value="hotkeys">Hotkeys</TabsTrigger>
+            </TabsList>
 
-        {/* Tab Body */}
-        <div className="p-6 overflow-y-auto space-y-5">
-          {activeTab === 'routing' && (
-            <>
+            <TabsContent value="routing" className="space-y-3.5 pb-4">
               {/* Built-in Virtual Mic Status Card */}
-              <div
-                className={`p-4 rounded-xl border ${
-                  virtualMicStatus?.virtualDeviceAttached
-                    ? 'bg-[#23a55a]/10 border-[#23a55a]/35'
-                    : 'bg-[#2b2d31] border-[#f0b232]/40'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
+              <div className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0">
                     {virtualMicStatus?.virtualDeviceAttached ? (
-                      <CheckCircle2 className="w-5 h-5 text-[#23a55a] shrink-0 mt-0.5" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     ) : (
-                      <AlertTriangle className="w-5 h-5 text-[#f0b232] shrink-0 mt-0.5" />
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                     )}
-                    <div className="space-y-1">
-                      <p className="text-xs font-bold text-white">
-                        Built-in Virtual Microphone (Memeboard Virtual Mic)
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="text-[11px] font-semibold text-zinc-100">
+                        Memeboard Virtual Mic
                       </p>
-                      <p className="text-[11px] text-[#dbdee1]">
-                        {virtualMicStatus?.statusMessage ||
-                          'Checking built-in USB Audio virtual driver status...'}
+                      <p className="text-[10px] text-zinc-400">
+                        {virtualMicStatus?.statusMessage || 'Checking virtual driver...'}
                       </p>
                       {virtualMicStatus?.savedPhysicalMic && (
-                        <p className="text-[11px] text-[#23a55a]">
-                          Saved original mic: <strong>{virtualMicStatus.savedPhysicalMic}</strong>{' '}
-                          (restored automatically when Memeboard quits)
+                        <p className="text-[10px] text-zinc-300 truncate">
+                          Restores: {virtualMicStatus.savedPhysicalMic}
                         </p>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0">
                     {virtualMicStatus?.virtualMicIsDefault && (
-                      <button
-                        type="button"
-                        onClick={onRestoreOriginalMic}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#35373c] hover:bg-[#404249] text-[11px] font-semibold text-white transition-colors"
-                      >
-                        <RotateCcw className="w-3 h-3" /> Restore Mic
-                      </button>
+                      <Button type="button" variant="secondary" size="xs" onClick={onRestoreOriginalMic}>
+                        <RotateCcw className="w-3 h-3" /> Restore
+                      </Button>
                     )}
                     {(!virtualMicStatus?.driverInstalled || !virtualMicStatus?.virtualDeviceAttached) && (
-                      <button
+                      <Button
                         type="button"
+                        variant="default"
+                        size="xs"
                         onClick={onInstallVirtualDriver}
                         disabled={isInstallingDriver}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-60 text-[11px] font-semibold text-white transition-colors"
                       >
-                        <Wrench className="w-3.5 h-3.5" />
-                        <span>
-                          {isInstallingDriver
-                            ? 'Working...'
-                            : virtualMicStatus?.driverInstalled
-                            ? 'Attach Device'
-                            : 'Install Driver'}
-                        </span>
-                      </button>
+                        <Wrench className="w-3 h-3" />
+                        <span>{isInstallingDriver ? 'Wait...' : 'Setup'}</span>
+                      </Button>
                     )}
                   </div>
                 </div>
 
-                {/* Auto-switch Windows Default Mic toggle */}
-                <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-between gap-4">
+                <div className="pt-2 border-t border-zinc-800 flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold text-white">
-                      Auto-Switch Windows Default Mic While Open
+                    <p className="text-[11px] font-medium text-zinc-100">
+                      Auto-Switch Default Mic
                     </p>
-                    <p className="text-[11px] text-[#949ba4]">
-                      Apps &amp; games using Default Mic get Memeboard automatically without touching your real mic settings.
-                      If TeamSpeak or a game was already open before Memeboard launched, reconnect once or select{' '}
-                      <strong className="text-[#dbdee1]">Memeboard Virtual Mic</strong> in that app.
+                    <p className="text-[10px] text-zinc-400">
+                      Reconnect TeamSpeak/games once if opened before Memeboard.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !localSettings.autoSwitchDefaultMic;
+                  <Switch
+                    checked={localSettings.autoSwitchDefaultMic}
+                    onCheckedChange={(next) => {
                       setLocalSettings((p) => ({ ...p, autoSwitchDefaultMic: next }));
                       onSetAutoSwitchMic(next);
                     }}
-                    className={`w-11 h-6 rounded-full transition-colors p-0.5 shrink-0 ${
-                      localSettings.autoSwitchDefaultMic ? 'bg-[#23a55a]' : 'bg-[#35373c]'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${
-                        localSettings.autoSwitchDefaultMic ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
+                  />
                 </div>
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#949ba4] uppercase tracking-wider">
-                  Audio Endpoints
+                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                  Endpoints
                 </span>
                 <button
                   type="button"
                   onClick={onRefreshDevices}
-                  className="flex items-center gap-1.5 text-xs text-[#5865f2] hover:underline font-medium"
+                  className="flex items-center gap-1 text-[10px] text-zinc-300 hover:text-white cursor-pointer"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Refresh Devices
+                  <RefreshCw className="w-3 h-3" /> Refresh
                 </button>
               </div>
 
-              {/* Physical Microphone Input */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#dbdee1] flex items-center gap-2">
-                  <Mic className="w-4 h-4 text-[#5865f2]" /> Physical Microphone Input (Untouched Source)
-                </label>
-                <select
-                  value={localSettings.micDeviceId || ''}
-                  onChange={(e) =>
-                    setLocalSettings({
-                      ...localSettings,
-                      micDeviceId: e.target.value || null,
-                    })
-                  }
-                  className="w-full bg-[#1e1f22] text-sm text-white px-3 py-2.5 rounded-xl border border-[#232428] focus:border-[#5865f2] outline-none"
-                >
-                  <option value="">Auto (Default Physical Microphone)</option>
-                  {physicalInputs.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} {d.isDefault ? '(OS Default)' : ''}
-                    </option>
-                  ))}
-                </select>
-                {devices.currentInput && (
-                  <p className="text-[11px] text-[#949ba4]">
-                    Active stream: <span className="text-[#dbdee1]">{devices.currentInput}</span>
-                  </p>
-                )}
-              </div>
-
-              {/* Broadcast Virtual Mic Bridge */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#dbdee1] flex items-center gap-2">
-                  <Radio className="w-4 h-4 text-[#23a55a]" /> Virtual Mic Bridge Output (Sent to Discord/Apps)
-                </label>
-                <select
-                  value={localSettings.broadcastDeviceId || ''}
-                  onChange={(e) =>
-                    setLocalSettings({
-                      ...localSettings,
-                      broadcastDeviceId: e.target.value || null,
-                    })
-                  }
-                  className="w-full bg-[#1e1f22] text-sm text-white px-3 py-2.5 rounded-xl border border-[#232428] focus:border-[#5865f2] outline-none"
-                >
-                  <option value="">Auto (Built-in Memeboard Virtual Mic / VB-Cable)</option>
-                  {virtualOutputs.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      [Virtual] {d.name}
-                    </option>
-                  ))}
-                  {physicalOutputs.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-                {devices.currentBroadcast && (
-                  <p className="text-[11px] text-[#23a55a]">
-                    Active broadcast target: {devices.currentBroadcast}
-                  </p>
-                )}
-              </div>
-
-              {/* Monitor Headphones Output */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#dbdee1] flex items-center gap-2">
-                  <Headphones className="w-4 h-4 text-[#b5bac1]" /> Local Monitor Headphones (You Hear Clips &amp; Previews)
-                </label>
-                <select
-                  value={localSettings.monitorDeviceId || ''}
-                  onChange={(e) =>
-                    setLocalSettings({
-                      ...localSettings,
-                      monitorDeviceId: e.target.value || null,
-                    })
-                  }
-                  className="w-full bg-[#1e1f22] text-sm text-white px-3 py-2.5 rounded-xl border border-[#232428] focus:border-[#5865f2] outline-none"
-                >
-                  <option value="">System Default Playback Device</option>
-                  {physicalOutputs.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} {d.isDefault ? '(Default)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Mic Pass-Through Gain */}
-              <div className="pt-2 border-t border-[#232428] space-y-2">
-                <div className="flex justify-between text-xs font-semibold">
-                  <span className="text-[#dbdee1]">Voice Pass-Through Level (100% = Bit-Transparent)</span>
-                  <span className="font-mono text-[#5865f2]">
-                    {Math.round(localSettings.micVolume * 100)}%
-                  </span>
+              <div className="space-y-2.5">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-zinc-300 flex items-center gap-1.5">
+                    <Mic className="w-3 h-3" /> Physical Mic
+                  </label>
+                  <select
+                    value={localSettings.micDeviceId || ''}
+                    onChange={(e) =>
+                      setLocalSettings({ ...localSettings, micDeviceId: e.target.value || null })
+                    }
+                    className="w-full h-8 bg-zinc-900 text-xs text-zinc-100 px-2.5 rounded-md border border-zinc-800 focus:border-zinc-500 outline-none"
+                  >
+                    <option value="">Auto (Default Physical Mic)</option>
+                    {physicalInputs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.02"
-                  value={localSettings.micVolume}
-                  onChange={(e) => {
-                    const nextMic = parseFloat(e.target.value);
-                    setLocalSettings({ ...localSettings, micVolume: nextMic });
-                    api
-                      .setVolumes(
-                        nextMic,
-                        localSettings.monitorVolume,
-                        localSettings.broadcastVolume,
-                        localSettings.monitorMuted,
-                        localSettings.broadcastMuted
-                      )
-                      .catch(() => {});
-                  }}
-                  className="w-full h-2 bg-[#1e1f22] rounded-lg appearance-none cursor-pointer accent-[#5865f2]"
-                />
-              </div>
-            </>
-          )}
 
-          {activeTab === 'ducking' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between p-4 rounded-xl bg-[#2b2d31] border border-[#232428]">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-zinc-300 flex items-center gap-1.5">
+                    <Radio className="w-3 h-3" /> Virtual Mic Bridge
+                  </label>
+                  <select
+                    value={localSettings.broadcastDeviceId || ''}
+                    onChange={(e) =>
+                      setLocalSettings({
+                        ...localSettings,
+                        broadcastDeviceId: e.target.value || null,
+                      })
+                    }
+                    className="w-full h-8 bg-zinc-900 text-xs text-zinc-100 px-2.5 rounded-md border border-zinc-800 focus:border-zinc-500 outline-none"
+                  >
+                    <option value="">Auto (Memeboard Virtual Mic)</option>
+                    {virtualOutputs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        [Virtual] {d.name}
+                      </option>
+                    ))}
+                    {physicalOutputs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-zinc-300 flex items-center gap-1.5">
+                    <Headphones className="w-3 h-3" /> Headphones Monitor
+                  </label>
+                  <select
+                    value={localSettings.monitorDeviceId || ''}
+                    onChange={(e) =>
+                      setLocalSettings({
+                        ...localSettings,
+                        monitorDeviceId: e.target.value || null,
+                      })
+                    }
+                    className="w-full h-8 bg-zinc-900 text-xs text-zinc-100 px-2.5 rounded-md border border-zinc-800 focus:border-zinc-500 outline-none"
+                  >
+                    <option value="">System Default Playback</option>
+                    {physicalOutputs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="pt-2 border-t border-zinc-800 space-y-1.5">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-zinc-300">Mic Pass-Through Gain</span>
+                    <span className="font-mono text-zinc-100">
+                      {Math.round(localSettings.micVolume * 100)}%
+                    </span>
+                  </div>
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={0.02}
+                    value={[localSettings.micVolume]}
+                    onValueChange={([nextMic]) => {
+                      setLocalSettings({ ...localSettings, micVolume: nextMic });
+                      api
+                        .setVolumes(
+                          nextMic,
+                          localSettings.monitorVolume,
+                          localSettings.broadcastVolume,
+                          localSettings.monitorMuted,
+                          localSettings.broadcastMuted
+                        )
+                        .catch(() => {});
+                    }}
+                  />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="ducking" className="space-y-3.5 pb-4">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-zinc-900 border border-zinc-800 gap-3">
                 <div>
-                  <h3 className="text-sm font-bold text-white">Auto Voice Ducking</h3>
-                  <p className="text-xs text-[#949ba4] mt-0.5">
-                    Smoothly lowers playing sound clips whenever your microphone detects speech
+                  <p className="text-[11px] font-semibold text-zinc-100">Auto Voice Ducking</p>
+                  <p className="text-[10px] text-zinc-400">
+                    Dips SFX volume whenever you speak
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !localSettings.voiceDuckingEnabled;
+                <Switch
+                  checked={localSettings.voiceDuckingEnabled}
+                  onCheckedChange={(next) => {
                     setLocalSettings({ ...localSettings, voiceDuckingEnabled: next });
                     api.setDuckingSettings(next, localSettings.voiceDuckingDb).catch(() => {});
                   }}
-                  className={`w-12 h-6 rounded-full transition-colors p-0.5 ${
-                    localSettings.voiceDuckingEnabled ? 'bg-[#23a55a]' : 'bg-[#35373c]'
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${
-                      localSettings.voiceDuckingEnabled ? 'translate-x-6' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs font-semibold">
-                  <span className="text-[#dbdee1]">Ducking Attenuation Depth</span>
-                  <span className="font-mono text-[#5865f2]">
-                    {localSettings.voiceDuckingDb} dB
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="-24"
-                  max="0"
-                  step="1"
-                  disabled={!localSettings.voiceDuckingEnabled}
-                  value={localSettings.voiceDuckingDb}
-                  onChange={(e) => {
-                    const nextDb = parseFloat(e.target.value);
-                    setLocalSettings({ ...localSettings, voiceDuckingDb: nextDb });
-                    api.setDuckingSettings(localSettings.voiceDuckingEnabled, nextDb).catch(() => {});
-                  }}
-                  className="w-full h-2 bg-[#1e1f22] rounded-lg appearance-none cursor-pointer accent-[#5865f2] disabled:opacity-50"
                 />
-                <div className="flex justify-between text-[10px] text-[#949ba4]">
-                  <span>-24 dB (Whisper quiet SFX)</span>
-                  <span>-10 dB (Balanced)</span>
-                  <span>0 dB (No ducking)</span>
-                </div>
               </div>
 
-              <div className="pt-4 border-t border-[#232428] space-y-2">
-                <div className="flex justify-between text-xs font-semibold">
-                  <span className="text-[#dbdee1] flex items-center gap-1.5">
-                    <Volume2 className="w-4 h-4 text-[#23a55a]" /> Auto Loudness Target (ITU-R BS.1770)
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-zinc-300">Ducking Depth</span>
+                  <span className="font-mono text-zinc-100">{localSettings.voiceDuckingDb} dB</span>
+                </div>
+                <Slider
+                  min={-24}
+                  max={0}
+                  step={1}
+                  disabled={!localSettings.voiceDuckingEnabled}
+                  value={[localSettings.voiceDuckingDb]}
+                  onValueChange={([nextDb]) => {
+                    setLocalSettings({ ...localSettings, voiceDuckingDb: nextDb });
+                    api
+                      .setDuckingSettings(localSettings.voiceDuckingEnabled, nextDb)
+                      .catch(() => {});
+                  }}
+                />
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t border-zinc-800">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-zinc-300 flex items-center gap-1">
+                    <Volume2 className="w-3 h-3" /> Loudness Target (BS.1770)
                   </span>
-                  <span className="font-mono text-[#23a55a]">
+                  <span className="font-mono text-zinc-100">
                     {localSettings.loudnessTargetLufs} LUFS
                   </span>
                 </div>
-                <input
-                  type="range"
-                  min="-24"
-                  max="-8"
-                  step="1"
-                  value={localSettings.loudnessTargetLufs}
-                  onChange={(e) =>
-                    setLocalSettings({
-                      ...localSettings,
-                      loudnessTargetLufs: parseFloat(e.target.value),
-                    })
+                <Slider
+                  min={-24}
+                  max={-8}
+                  step={1}
+                  value={[localSettings.loudnessTargetLufs]}
+                  onValueChange={([lufs]) =>
+                    setLocalSettings({ ...localSettings, loudnessTargetLufs: lufs })
                   }
-                  className="w-full h-2 bg-[#1e1f22] rounded-lg appearance-none cursor-pointer accent-[#23a55a]"
                 />
-                <p className="text-[11px] text-[#949ba4]">
-                  Recomputes gated loudness across every trimmed clip automatically when saved.
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-lg bg-zinc-900 border border-zinc-800 gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold text-zinc-100">
+                    AEC-Safe Monitor (+7 Hz)
+                  </p>
+                  <p className="text-[10px] text-zinc-400">
+                    Phase-shifts headphones only so Echo Cancellation can&apos;t cancel clips.
+                  </p>
+                </div>
+                <Switch
+                  checked={localSettings.aecSafeMonitor}
+                  onCheckedChange={(next) => {
+                    setLocalSettings({ ...localSettings, aecSafeMonitor: next });
+                    api.setAecSafeMonitor(next).catch(() => {});
+                  }}
+                />
+              </div>
+
+              <div className="p-3 rounded-lg bg-zinc-900/70 border border-zinc-800 space-y-1.5 text-[10px] text-zinc-400">
+                <p className="font-semibold text-zinc-200 flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3 text-amber-400" /> Voice App Checklist
+                </p>
+                <p>
+                  <strong className="text-zinc-200">TeamSpeak:</strong> Uncheck Echo cancellation,
+                  Echo reduction, and set background noise Off/Low.
+                </p>
+                <p>
+                  <strong className="text-zinc-200">Discord:</strong> Disable Echo Cancellation &amp;
+                  Krisp Noise Suppression.
+                </p>
+                <p>
+                  <strong className="text-zinc-200">Google Meet:</strong> Turn Noise cancellation
+                  Off.
                 </p>
               </div>
+            </TabsContent>
 
-              {/* AEC-Safe Monitor Decorrelation */}
-              <div className="pt-4 border-t border-[#232428] space-y-3">
-                <div className="flex items-center justify-between p-4 rounded-xl bg-[#2b2d31] border border-[#232428] gap-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                      AEC-Safe Headphone Monitor
-                      <span className="px-1.5 py-0.5 rounded bg-[#5865f2]/20 text-[#99aab5] text-[10px] font-mono">
-                        +7 Hz Phase Shift
-                      </span>
-                    </h3>
-                    <p className="text-xs text-[#949ba4] mt-0.5 leading-relaxed">
-                      Subtly phase-decorrelates <strong>only your headphones</strong> so TeamSpeak/Discord Echo
-                      Cancellation can&apos;t lock onto and erase clips. Virtual Mic broadcast stays 100% pure.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !localSettings.aecSafeMonitor;
-                      setLocalSettings({ ...localSettings, aecSafeMonitor: next });
-                      api.setAecSafeMonitor(next).catch(() => {});
-                    }}
-                    className={`w-12 h-6 rounded-full transition-colors p-0.5 shrink-0 ${
-                      localSettings.aecSafeMonitor ? 'bg-[#23a55a]' : 'bg-[#35373c]'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${
-                        localSettings.aecSafeMonitor ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
+            <TabsContent value="hotkeys" className="space-y-3 pb-4">
+              <p className="text-[10px] text-zinc-400 bg-zinc-900 border border-zinc-800 rounded-md p-2.5">
+                Non-consuming Raw Input pass-through hooks work globally inside games without
+                blocking Esc or F-keys.
+              </p>
 
-                {/* Voice Chat Setup Checklist */}
-                <div className="p-4 rounded-xl bg-[#1e1f22] border border-[#35373c]/60 space-y-2">
-                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <ShieldAlert className="w-3.5 h-3.5 text-[#f0b232]" />
-                    Voice Chat Audio Checklist (Prevent Cut-Off Clips)
-                  </h4>
-                  <p className="text-[11px] text-[#949ba4]">
-                    When wearing headphones, Echo Reduction and AI noise suppressors treat soundboard clips as background noise. Disable these in your voice app for full quality:
-                  </p>
-                  <ul className="text-[11px] text-[#dbdee1] space-y-1 pl-1">
-                    <li>
-                      <strong className="text-white">TeamSpeak:</strong> Options → Capture → uncheck{' '}
-                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#f0b232]">Echo cancellation</code>,{' '}
-                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#f0b232]">Echo reduction</code>, and set{' '}
-                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#f0b232]">Remove background noise</code> Off/Low.
-                    </li>
-                    <li>
-                      <strong className="text-white">Discord:</strong> Voice &amp; Video → turn{' '}
-                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#5865f2]">Echo Cancellation</code> Off and switch{' '}
-                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#5865f2]">Noise Suppression</code> off Krisp.
-                    </li>
-                    <li>
-                      <strong className="text-white">Google Meet:</strong> Settings → Audio → turn{' '}
-                      <code className="px-1 py-0.5 rounded bg-[#2b2d31] text-[#23a55a]">Noise cancellation</code> Off.
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'hotkeys' && (
-            <div className="space-y-4">
-              <div className="p-3.5 rounded-xl bg-[#5865f2]/10 border border-[#5865f2]/30 text-xs text-[#dbdee1]">
-                Memeboard uses non-consuming Windows Raw Input pass-through hooks — hotkeys trigger
-                cleanly in fullscreen games without ever blocking keys like <kbd className="px-1.5 py-0.5 rounded bg-[#1e1f22] font-mono">Esc</kbd> or{' '}
-                <kbd className="px-1.5 py-0.5 rounded bg-[#1e1f22] font-mono">F1–F5</kbd>.
-              </div>
-
-              {/* Panic Key */}
-              <div className="p-4 rounded-xl bg-[#2b2d31] border border-[#232428] flex items-center justify-between gap-4">
+              <div className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-between gap-3">
                 <div>
-                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <ShieldAlert className="w-4 h-4 text-[#f23f42]" /> Panic Key (Stop All Sounds)
-                  </h4>
-                  <p className="text-[11px] text-[#949ba4] mt-0.5">
-                    Instantly stops all playing audio clips anywhere
-                  </p>
+                  <p className="text-[11px] font-semibold text-zinc-100">Panic Stop All</p>
+                  <p className="text-[10px] text-zinc-400">Halts every playing clip</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setRecordingField('panic')}
-                  className={`min-w-44 py-2 px-3 rounded-lg text-xs font-mono border text-center transition-all ${
+                  className={cn(
+                    'min-w-36 h-8 px-2.5 rounded-md text-[11px] font-mono border cursor-pointer',
                     recordingField === 'panic'
-                      ? 'bg-[#5865f2]/20 border-[#5865f2] text-white animate-pulse'
-                      : 'bg-[#1e1f22] border-transparent text-[#dbdee1] hover:border-[#35373c]'
-                  }`}
+                      ? 'bg-zinc-100 text-zinc-950 border-white'
+                      : 'bg-zinc-950 border-zinc-800 text-zinc-200'
+                  )}
                 >
                   {recordingField === 'panic'
-                    ? 'Press key combo...'
+                    ? 'Press keys...'
                     : localSettings.panicHotkey || 'Unbound'}
                 </button>
               </div>
 
-              {/* Overlay Toggle */}
-              <div className="p-4 rounded-xl bg-[#2b2d31] border border-[#232428] flex items-center justify-between gap-4">
+              <div className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-between gap-3">
                 <div>
-                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Keyboard className="w-4 h-4 text-[#5865f2]" /> Toggle Floating Mini Overlay
-                  </h4>
-                  <p className="text-[11px] text-[#949ba4] mt-0.5">
-                    Shows or hides the non-focus-stealing soundboard overlay
+                  <p className="text-[11px] font-semibold text-zinc-100 flex items-center gap-1">
+                    <Keyboard className="w-3 h-3" /> Toggle Overlay
                   </p>
+                  <p className="text-[10px] text-zinc-400">Bottom-right floating overlay</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setRecordingField('overlay')}
-                  className={`min-w-44 py-2 px-3 rounded-lg text-xs font-mono border text-center transition-all ${
+                  className={cn(
+                    'min-w-36 h-8 px-2.5 rounded-md text-[11px] font-mono border cursor-pointer',
                     recordingField === 'overlay'
-                      ? 'bg-[#5865f2]/20 border-[#5865f2] text-white animate-pulse'
-                      : 'bg-[#1e1f22] border-transparent text-[#dbdee1] hover:border-[#35373c]'
-                  }`}
+                      ? 'bg-zinc-100 text-zinc-950 border-white'
+                      : 'bg-zinc-950 border-zinc-800 text-zinc-200'
+                  )}
                 >
                   {recordingField === 'overlay'
-                    ? 'Press key combo...'
-                    : localSettings.overlayHotkey || 'Click to bind'}
+                    ? 'Press keys...'
+                    : localSettings.overlayHotkey || 'Bind key'}
                 </button>
               </div>
-            </div>
-          )}
+            </TabsContent>
+          </Tabs>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-6 py-4 bg-[#2b2d31] border-t border-[#232428] shrink-0">
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="px-4 py-2 rounded-lg text-xs font-semibold text-[#dbdee1] hover:bg-[#35373c] transition-colors"
-          >
+        <div className="flex items-center justify-end gap-1.5 px-4 py-3 bg-zinc-900/60 border-t border-zinc-800 shrink-0">
+          <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            onClick={handleSave}
-            className="px-5 py-2 rounded-lg bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-semibold shadow-md transition-colors"
+            variant="default"
+            size="sm"
+            onClick={() => {
+              onSaveSettings(localSettings);
+              onClose();
+            }}
           >
             Save &amp; Apply
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };

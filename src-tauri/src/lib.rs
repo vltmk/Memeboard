@@ -12,12 +12,13 @@ pub mod virtual_mic;
 unsafe extern "C" {}
 
 use commands::{
-    AppState, delete_sound, get_audio_devices, get_overlay_visibility, get_playback_status,
-    get_virtual_mic_status, import_sound_file, install_virtual_driver, load_soundboard_state,
-    play_sound, play_sound_internal, preview_sound, restore_original_mic, save_soundboard_state,
-    set_aec_safe_monitor, set_audio_devices, set_auto_switch_mic, set_ducking_settings,
-    set_hotkey_recording, set_volumes, stop_all_sounds, stop_preview, stop_sound,
-    sync_hotkeys_from_state, toggle_overlay_window, toggle_overlay_window_internal,
+    AppState, delete_sound, dock_main_window, dock_window_bottom_right, get_audio_devices,
+    get_overlay_visibility, get_playback_status, get_virtual_mic_status, import_sound_file,
+    install_virtual_driver, load_soundboard_state, play_sound, play_sound_internal, preview_sound,
+    restore_original_mic, save_soundboard_state, set_aec_safe_monitor, set_audio_devices,
+    set_auto_switch_mic, set_ducking_settings, set_hotkey_recording, set_volumes, stop_all_sounds,
+    stop_preview, stop_sound, sync_hotkeys_from_state, toggle_overlay_window,
+    toggle_overlay_window_internal,
 };
 use device_manager::DeviceManager;
 use hotkeys::{HotkeyAction, HotkeyManager};
@@ -120,6 +121,13 @@ pub fn run() {
         .manage(app_state)
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            if let Some(main_win) = app.get_webview_window("main") {
+                dock_window_bottom_right(&main_win, 16);
+            }
+            if let Some(overlay_win) = app.get_webview_window("overlay") {
+                dock_window_bottom_right(&overlay_win, 16);
+            }
 
             // 1. Start non-consuming Windows Raw Input global hotkey listener
             {
@@ -271,6 +279,7 @@ pub fn run() {
             save_soundboard_state,
             toggle_overlay_window,
             get_overlay_visibility,
+            dock_main_window,
             set_hotkey_recording,
             get_virtual_mic_status,
             install_virtual_driver,

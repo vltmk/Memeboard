@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  X,
   Play,
   Square,
   Keyboard,
@@ -15,6 +14,11 @@ import { SoundItem, PlaybackMode } from '../types';
 import { drawWaveform } from '../utils/audio';
 import { formatKeyboardCombo } from '../utils/hotkeys';
 import { api } from '../services/api';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Slider } from './ui/slider';
+import { cn } from '../lib/utils';
 
 interface SoundEditorModalProps {
   sound: SoundItem | null;
@@ -78,7 +82,6 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
     }
   }, [sound]);
 
-  // Size canvas cleanly with ResizeObserver ONLY when modal/sound opens (zero 60fps reallocations)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !sound) return;
@@ -172,7 +175,6 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
     };
   }, [sound]);
 
-  // Pause global Raw Input hotkeys while recording keybind
   useEffect(() => {
     api.setHotkeyRecording(isRecordingHotkey).catch(() => {});
     if (!isRecordingHotkey) return;
@@ -270,59 +272,51 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 select-none animate-in fade-in">
-      <div className="bg-[#313338] border border-[#232428] w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#232428] shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#232428] flex items-center justify-center text-2xl shadow-inner">
+    <Dialog
+      open={Boolean(sound)}
+      onOpenChange={(open) => {
+        if (!open) {
+          stopPreview();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <div className="flex items-center gap-2.5 pr-6">
+            <span className="w-7 h-7 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-base">
               {emoji}
-            </div>
+            </span>
             <div>
-              <h2 className="text-base font-bold text-white">Edit Sound Clip</h2>
-              <p className="text-xs text-[#949ba4]">Trim waveform, organize category &amp; bind global hotkey</p>
+              <DialogTitle>Edit Sound</DialogTitle>
+              <DialogDescription>Trim waveform, icon, volume &amp; hotkey</DialogDescription>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              stopPreview();
-              onClose();
-            }}
-            className="p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#35373c] transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+        </DialogHeader>
 
-        {/* Body */}
-        <div className="p-6 space-y-5 overflow-y-auto">
-          {/* Name + Category + Emoji */}
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-            <div className="sm:col-span-6 space-y-1.5">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider">
-                Sound Name
+        <div className="p-4 space-y-4 overflow-y-auto text-xs">
+          {/* Name + Category */}
+          <div className="grid grid-cols-2 gap-2.5">
+            <div className="space-y-1">
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">
+                Name
               </label>
-              <input
-                type="text"
+              <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Vine Boom"
-                className="w-full bg-[#1e1f22] text-sm text-white px-3 py-2 rounded-lg border border-transparent focus:border-[#5865f2] outline-none transition-colors"
+                placeholder="Clip name"
               />
             </div>
 
-            <div className="sm:col-span-6 space-y-1.5">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider flex items-center gap-1">
-                <Tag className="w-3 h-3" /> Category
+            <div className="space-y-1">
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                <Tag className="w-2.5 h-2.5" /> Category
               </label>
-              <input
-                type="text"
+              <Input
                 list="memeboard-categories"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 placeholder="General"
-                className="w-full bg-[#1e1f22] text-sm text-white px-3 py-2 rounded-lg border border-transparent focus:border-[#5865f2] outline-none transition-colors"
               />
               <datalist id="memeboard-categories">
                 {allCategories.map((c) => (
@@ -332,31 +326,29 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
             </div>
           </div>
 
-          {/* Emoji Picker (shows all 15 presets + custom input) */}
-          <div className="space-y-2">
+          {/* Emoji Picker */}
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider">
-                Icon / Emoji
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">
+                Emoji Icon
               </label>
-              <input
-                type="text"
+              <Input
                 value={emoji}
                 onChange={(e) => setEmoji(e.target.value.slice(0, 4))}
-                title="Or paste any custom emoji"
-                className="w-16 text-center bg-[#1e1f22] text-sm text-white px-2 py-1 rounded-md border border-[#35373c] focus:border-[#5865f2] outline-none"
+                className="w-12 h-6 text-center px-1"
+                title="Custom emoji"
               />
             </div>
-            <div className="flex flex-wrap items-center gap-1.5 bg-[#1e1f22] p-2 rounded-lg">
+            <div className="flex flex-wrap gap-1 bg-zinc-900 border border-zinc-800 p-1.5 rounded-lg">
               {EMOJI_PRESETS.map((e) => (
                 <button
                   key={e}
                   type="button"
                   onClick={() => setEmoji(e)}
-                  className={`w-8 h-8 rounded-md flex items-center justify-center text-base transition-all ${
-                    emoji === e
-                      ? 'bg-[#5865f2] scale-110 shadow'
-                      : 'hover:bg-[#35373c]'
-                  }`}
+                  className={cn(
+                    'w-6 h-6 rounded flex items-center justify-center text-sm transition-colors cursor-pointer',
+                    emoji === e ? 'bg-zinc-100 text-zinc-950' : 'hover:bg-zinc-800'
+                  )}
                 >
                   {e}
                 </button>
@@ -364,15 +356,15 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
             </div>
           </div>
 
-          {/* Waveform & Trim Section */}
-          <div className="space-y-2">
+          {/* Waveform Preview & Trim */}
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider flex items-center gap-1.5">
-                <Scissors className="w-3.5 h-3.5 text-[#5865f2]" /> Waveform Trim &amp; Seek
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                <Scissors className="w-3 h-3" /> Waveform Preview
               </label>
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-mono text-[#949ba4]">
-                  {trimStart.toFixed(2)}s – {trimEnd.toFixed(2)}s ({(trimEnd - trimStart).toFixed(2)}s)
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-zinc-400">
+                  {trimStart.toFixed(2)}s – {trimEnd.toFixed(2)}s
                 </span>
                 <button
                   type="button"
@@ -381,119 +373,114 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
                     setTrimEnd(sound.duration);
                     setPreviewTime(0);
                   }}
-                  title="Reset trim to full clip"
-                  className="text-[11px] font-medium text-[#b5bac1] hover:text-white flex items-center gap-1"
+                  className="text-[10px] text-zinc-400 hover:text-zinc-100 flex items-center gap-0.5 cursor-pointer"
                 >
-                  <RotateCcw className="w-3 h-3" /> Reset
+                  <RotateCcw className="w-2.5 h-2.5" /> Reset
                 </button>
               </div>
             </div>
 
-            <div className="relative bg-[#1e1f22] rounded-xl p-2 border border-[#232428]">
+            <div className="bg-zinc-900 rounded-lg p-1.5 border border-zinc-800">
               <canvas
                 ref={canvasRef}
                 onPointerDown={handleCanvasPointerDown}
                 onPointerMove={handleCanvasPointerMove}
                 onPointerUp={handleCanvasPointerUp}
                 onPointerCancel={handleCanvasPointerUp}
-                className="w-full h-24 rounded-lg cursor-ew-resize touch-none block"
+                className="w-full h-20 rounded cursor-ew-resize touch-none block"
               />
             </div>
 
-            <div className="flex items-center justify-between gap-3 pt-1">
-              <button
+            <div className="flex items-center justify-between pt-0.5">
+              <Button
                 type="button"
+                variant={isPlayingPreview ? 'secondary' : 'default'}
+                size="xs"
                 onClick={togglePreview}
-                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  isPlayingPreview
-                    ? 'bg-[#f23f42] hover:bg-[#d83538] text-white'
-                    : 'bg-[#5865f2] hover:bg-[#4752c4] text-white'
-                }`}
               >
                 {isPlayingPreview ? (
                   <>
-                    <Square className="w-3.5 h-3.5 fill-current" /> Stop Preview
+                    <Square className="w-2.5 h-2.5 fill-current" /> Stop
                   </>
                 ) : (
                   <>
-                    <Play className="w-3.5 h-3.5 fill-current" /> Preview Headphones
+                    <Play className="w-2.5 h-2.5 fill-current" /> Preview
                   </>
                 )}
-              </button>
-
-              <span className="text-[11px] text-[#23a55a] flex items-center gap-1 font-medium">
-                <Headphones className="w-3.5 h-3.5" /> Monitor-only (not sent to mic/Discord)
+              </Button>
+              <span className="text-[10px] text-zinc-400 flex items-center gap-1">
+                <Headphones className="w-3 h-3" /> Headphones only
               </span>
             </div>
           </div>
 
-          {/* Volume Slider */}
+          {/* Volume */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider flex items-center gap-1.5">
-                <Volume2 className="w-3.5 h-3.5" /> Clip Volume Gain
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                <Volume2 className="w-3 h-3" /> Clip Gain
               </label>
-              <span className="text-xs font-mono text-white">{Math.round(volume * 100)}%</span>
+              <span className="text-[11px] font-mono text-zinc-200">{Math.round(volume * 100)}%</span>
             </div>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.02"
-              value={volume}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="w-full h-2 bg-[#1e1f22] rounded-lg appearance-none cursor-pointer accent-[#5865f2]"
+            <Slider
+              min={0}
+              max={2}
+              step={0.02}
+              value={[volume]}
+              onValueChange={([v]) => setVolume(v)}
             />
           </div>
 
           {/* Hotkey & Playback Mode */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider flex items-center gap-1.5">
-                <Keyboard className="w-3.5 h-3.5" /> Global Hotkey (Pass-Through)
+          <div className="grid grid-cols-2 gap-2.5">
+            <div className="space-y-1">
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                <Keyboard className="w-3 h-3" /> Hotkey
               </label>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1">
                 <button
                   type="button"
                   onClick={() => setIsRecordingHotkey(true)}
-                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-mono text-left border transition-all ${
+                  className={cn(
+                    'flex-1 h-8 px-2.5 rounded-md text-[11px] font-mono text-left border transition-colors cursor-pointer truncate',
                     isRecordingHotkey
-                      ? 'bg-[#5865f2]/20 border-[#5865f2] text-white animate-pulse'
-                      : 'bg-[#1e1f22] border-transparent text-[#dbdee1] hover:border-[#35373c]'
-                  }`}
+                      ? 'bg-zinc-100 text-zinc-950 border-white'
+                      : 'bg-zinc-900 border-zinc-800 text-zinc-200 hover:border-zinc-700'
+                  )}
                 >
-                  {isRecordingHotkey
-                    ? 'Press any key combo...'
-                    : hotkey || 'Click to bind hotkey'}
+                  {isRecordingHotkey ? 'Press keys...' : hotkey || 'Bind key'}
                 </button>
                 {hotkey && (
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8"
                     onClick={() => setHotkey('')}
-                    className="px-2.5 rounded-lg bg-[#1e1f22] text-[#949ba4] hover:text-white text-xs"
                     title="Clear Hotkey"
                   >
                     ✕
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[#b5bac1] uppercase tracking-wider">
-                Trigger Behavior
+            <div className="space-y-1">
+              <label className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">
+                Mode
               </label>
-              <div className="grid grid-cols-3 gap-1 bg-[#1e1f22] p-1 rounded-lg">
+              <div className="grid grid-cols-3 gap-0.5 bg-zinc-900 border border-zinc-800 p-0.5 rounded-md h-8">
                 {(['restart', 'stop', 'overlap'] as PlaybackMode[]).map((mode) => (
                   <button
                     key={mode}
                     type="button"
                     onClick={() => setPlaybackMode(mode)}
-                    className={`py-1.5 rounded-md text-[11px] font-semibold capitalize transition-colors ${
+                    className={cn(
+                      'rounded text-[10px] font-medium capitalize transition-colors cursor-pointer',
                       playbackMode === mode
-                        ? 'bg-[#5865f2] text-white'
-                        : 'text-[#949ba4] hover:text-white'
-                    }`}
+                        ? 'bg-zinc-100 text-zinc-950'
+                        : 'text-zinc-400 hover:text-zinc-100'
+                    )}
                   >
                     {mode}
                   </button>
@@ -504,40 +491,38 @@ export const SoundEditorModal: React.FC<SoundEditorModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 bg-[#2b2d31] border-t border-[#232428] shrink-0">
-          <button
+        <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/60 border-t border-zinc-800 shrink-0">
+          <Button
             type="button"
+            variant="destructive"
+            size="sm"
             onClick={() => {
               stopPreview();
               onDelete(sound);
               onClose();
             }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-[#f23f42] hover:bg-[#f23f42]/10 transition-colors"
           >
-            <Trash2 className="w-4 h-4" /> Delete Sound
-          </button>
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </Button>
 
-          <div className="flex items-center gap-2">
-            <button
+          <div className="flex items-center gap-1.5">
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 stopPreview();
                 onClose();
               }}
-              className="px-4 py-2 rounded-lg text-xs font-semibold text-[#dbdee1] hover:bg-[#35373c] transition-colors"
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              className="px-5 py-2 rounded-lg bg-[#23a55a] hover:bg-[#1e8e4c] text-white text-xs font-semibold shadow-md transition-colors"
-            >
-              Save Changes
-            </button>
+            </Button>
+            <Button type="button" variant="default" size="sm" onClick={handleSave}>
+              Save
+            </Button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };

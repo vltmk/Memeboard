@@ -66,13 +66,65 @@ pub fn play_sound_internal(state: &AppState, sound_id: &str) -> Result<(), Strin
     Ok(())
 }
 
+pub fn dock_window_bottom_right(window: &tauri::WebviewWindow, margin: i32) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowRect, HWND_TOP, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            SetWindowPos, SystemParametersInfoW,
+        };
+
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+            unsafe {
+                let mut work = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                if SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0) != 0
+                {
+                    let mut win_rect = RECT {
+                        left: 0,
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                    };
+                    if GetWindowRect(hwnd, &mut win_rect) != 0 {
+                        let w = (win_rect.right - win_rect.left).max(1);
+                        let h = (win_rect.bottom - win_rect.top).max(1);
+                        let x = (work.right - w - margin).max(work.left);
+                        let y = (work.bottom - h - margin).max(work.top);
+                        SetWindowPos(
+                            hwnd,
+                            HWND_TOP,
+                            x,
+                            y,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, margin);
+    }
+}
+
 pub fn toggle_overlay_window_internal(app: &AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
     let overlay = app
         .get_webview_window("overlay")
         .ok_or_else(|| "Overlay window not found".to_string())?;
 
-    let currently_visible = overlay.is_visible().unwrap_or(false);
+    let currently_visible = state.overlay_visible.load(Ordering::Acquire)
+        && overlay.is_visible().unwrap_or(false);
     if currently_visible {
         overlay
             .hide()
@@ -81,8 +133,11 @@ pub fn toggle_overlay_window_internal(app: &AppHandle) -> Result<bool, String> {
         let _ = app.emit("overlay-visibility", false);
         Ok(false)
     } else {
+        let _ = overlay.set_focusable(false);
         let _ = overlay.set_always_on_top(true);
+        dock_window_bottom_right(&overlay, 16);
         show_window_no_activate(&overlay)?;
+        dock_window_bottom_right(&overlay, 16);
         state.overlay_visible.store(true, Ordering::Release);
         let _ = app.emit("overlay-visibility", true);
         Ok(true)
@@ -93,8 +148,9 @@ fn show_window_no_activate(window: &tauri::WebviewWindow) -> Result<(), String> 
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GWL_EXSTYLE, GetWindowLongPtrW, SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+            GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowLongPtrW,
+            SetWindowPos, ShowWindow, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         };
 
         if let Ok(hwnd) = window.hwnd() {
@@ -105,15 +161,29 @@ fn show_window_no_activate(window: &tauri::WebviewWindow) -> Result<(), String> 
                 if next != style {
                     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
                 }
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+                );
                 ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
-            return Ok(());
         }
     }
 
-    window
-        .show()
-        .map_err(|e| format!("Failed to show overlay: {e}"))
+    let _ = window.show();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn dock_main_window(app: AppHandle) {
+    if let Some(main_win) = app.get_webview_window("main") {
+        dock_window_bottom_right(&main_win, 16);
+    }
 }
 
 #[tauri::command]

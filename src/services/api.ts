@@ -143,6 +143,10 @@ export const api = {
     return await invoke<boolean>('get_overlay_visibility');
   },
 
+  async dockMainWindow(): Promise<void> {
+    return await invoke('dock_main_window');
+  },
+
   async setHotkeyRecording(paused: boolean): Promise<void> {
     return await invoke('set_hotkey_recording', { paused });
   },

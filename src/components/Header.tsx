@@ -8,9 +8,13 @@ import {
   Square,
   Layers,
   Mic,
-  AlertTriangle,
+  ArrowDownRight,
 } from 'lucide-react';
 import { AudioPlaybackStatus, AudioSettings, VirtualMicStatus } from '../types';
+import { Button } from './ui/button';
+import { Slider } from './ui/slider';
+import { Badge } from './ui/badge';
+import { cn } from '../lib/utils';
 
 interface HeaderProps {
   settings: AudioSettings;
@@ -20,6 +24,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onStopAll: () => void;
   onToggleOverlay: () => void;
+  onDockBottomRight: () => void;
   onToggleMonitorMute: () => void;
   onMonitorVolumeChange: (val: number) => void;
   onToggleBroadcastMute: () => void;
@@ -34,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onStopAll,
   onToggleOverlay,
+  onDockBottomRight,
   onToggleMonitorMute,
   onMonitorVolumeChange,
   onToggleBroadcastMute,
@@ -45,181 +51,175 @@ export const Header: React.FC<HeaderProps> = ({
   const routingHealthy =
     playbackStatus.broadcastStreamActive && playbackStatus.micStreamActive;
 
-  let statusLabel = 'Audio Engine Ready';
-  let statusColor = 'text-[#949ba4] bg-[#232428] border-[#35373c]';
-  let dotColor = 'bg-[#949ba4]';
-
+  let statusLabel = 'Ready';
+  let dotClass = 'bg-zinc-500';
   if (routingHealthy) {
-    statusLabel = playbackStatus.micActive ? 'Voice Active • Live' : 'Virtual Mic Live';
-    statusColor = 'text-[#23a55a] bg-[#23a55a]/10 border-[#23a55a]/30';
-    dotColor = playbackStatus.micActive ? 'bg-[#23a55a] animate-ping' : 'bg-[#23a55a]';
+    statusLabel = playbackStatus.micActive ? 'Voice Live' : 'Live';
+    dotClass = playbackStatus.micActive ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-400';
   } else if (!driverReady || !vmicAttached) {
-    statusLabel = driverReady ? 'Virtual Mic Standby' : 'Driver Setup Needed';
-    statusColor = 'text-[#f0b232] bg-[#f0b232]/10 border-[#f0b232]/30';
-    dotColor = 'bg-[#f0b232]';
+    statusLabel = driverReady ? 'Standby' : 'Setup';
+    dotClass = 'bg-amber-400';
   } else if (!playbackStatus.micStreamActive || playbackStatus.lastAudioError) {
-    statusLabel = 'Check Audio Input';
-    statusColor = 'text-[#f23f42] bg-[#f23f42]/10 border-[#f23f42]/30';
-    dotColor = 'bg-[#f23f42]';
+    statusLabel = 'Check Mic';
+    dotClass = 'bg-red-400';
   }
 
   const tooltip =
     playbackStatus.lastAudioError ||
     virtualMicStatus?.statusMessage ||
-    'Real-time pass-through & soundboard status';
+    'Audio routing status';
 
   return (
-    <header className="flex items-center justify-between px-5 py-3 bg-[#2b2d31] border-b border-[#1e1f22] select-none shrink-0 gap-4">
-      {/* Left: Brand + Health Badge */}
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#5865f2] to-[#4752c4] flex items-center justify-center shadow-lg shadow-[#5865f2]/20 shrink-0">
-          <Radio className="w-5 h-5 text-white" />
-        </div>
-        <div className="flex flex-col min-w-0">
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-base font-bold tracking-tight text-white leading-none">
-              Memeboard
-            </h1>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              title={tooltip}
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border transition-colors ${statusColor}`}
-            >
-              <span className="relative flex h-2 w-2">
-                <span className={`inline-flex h-2 w-2 rounded-full ${dotColor}`} />
-              </span>
-              {statusLabel}
-              {!routingHealthy && (!driverReady || !vmicAttached || playbackStatus.lastAudioError) && (
-                <AlertTriangle className="w-3 h-3 ml-0.5" />
-              )}
-            </button>
+    <header className="bg-zinc-950 border-b border-zinc-800/90 select-none shrink-0">
+      {/* Top Minimal Brand + Actions */}
+      <div className="flex items-center justify-between px-3 py-2 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-6 h-6 rounded-md bg-zinc-100 text-zinc-950 flex items-center justify-center shrink-0">
+            <Radio className="w-3.5 h-3.5" />
           </div>
-          <span className="text-[11px] text-[#949ba4] truncate mt-0.5">
-            {virtualMicStatus?.virtualMicIsDefault
-              ? 'Default Mic: Memeboard Virtual Mic (Physical mic preserved)'
-              : 'Clean Mic Pass-Through & Virtual Soundboard'}
+          <span className="text-xs font-semibold tracking-tight text-zinc-50 truncate">
+            Memeboard
           </span>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title={tooltip}
+            className="cursor-pointer"
+          >
+            <Badge variant="muted" className="hover:border-zinc-600">
+              <span className={cn('h-1.5 w-1.5 rounded-full', dotClass)} />
+              <span>{statusLabel}</span>
+            </Badge>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            type="button"
+            variant={isPlaying ? 'default' : 'ghost'}
+            size="icon"
+            onClick={onStopAll}
+            title={`Panic Stop All (${settings.panicHotkey || 'Unbound'})`}
+          >
+            <Square className="w-3 h-3 fill-current" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onToggleOverlay}
+            title={`Toggle Overlay (${settings.overlayHotkey || 'Unbound'})`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onDockBottomRight}
+            title="Dock to Bottom-Right"
+          >
+            <ArrowDownRight className="w-3.5 h-3.5" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onOpenSettings}
+            title="Audio, Virtual Mic & Hotkey Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="default"
+            size="xs"
+            onClick={onAddSoundClick}
+            className="ml-0.5"
+          >
+            <Plus className="w-3 h-3" />
+            <span>Add</span>
+          </Button>
         </div>
       </div>
 
-      {/* Center: Live Dual Mix Controls (Monitor Headphones + Virtual Mic Output) */}
-      <div className="hidden md:flex items-center gap-3 bg-[#232428] px-3 py-1.5 rounded-xl border border-[#35373c]/60">
+      {/* Dense Dual-Mix Strip (Always visible in compact vertical layout) */}
+      <div className="grid grid-cols-2 gap-3 px-3 py-2 bg-zinc-900/50 border-t border-zinc-900">
         {/* Local Headphones Monitor */}
-        <div className="flex items-center gap-2 pr-3 border-r border-[#35373c]">
+        <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={onToggleMonitorMute}
             title={settings.monitorMuted ? 'Unmute Local Headphones' : 'Mute Local Headphones'}
-            className={`p-1.5 rounded-lg transition-colors ${
+            className={cn(
+              'p-1 rounded-md transition-colors shrink-0 cursor-pointer',
               settings.monitorMuted
-                ? 'bg-[#f23f42]/15 text-[#f23f42] hover:bg-[#f23f42]/25'
-                : 'text-[#b5bac1] hover:text-white hover:bg-[#35373c]'
-            }`}
+                ? 'bg-zinc-800 text-red-400'
+                : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+            )}
           >
             {settings.monitorMuted ? (
-              <VolumeX className="w-4 h-4" />
+              <VolumeX className="w-3.5 h-3.5" />
             ) : (
-              <Volume2 className="w-4 h-4" />
+              <Volume2 className="w-3.5 h-3.5" />
             )}
           </button>
-          <div className="flex flex-col w-20 xl:w-24">
-            <div className="flex justify-between text-[10px] font-medium text-[#949ba4]">
-              <span>Headphones</span>
-              <span>{settings.monitorMuted ? 'MUTED' : `${Math.round(settings.monitorVolume * 100)}%`}</span>
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="flex items-center justify-between text-[10px] text-zinc-400 leading-none">
+              <span className="truncate">Local</span>
+              <span className="font-mono text-zinc-200">
+                {settings.monitorMuted ? 'MUTE' : `${Math.round(settings.monitorVolume * 100)}%`}
+              </span>
             </div>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={settings.monitorVolume}
-              onChange={(e) => onMonitorVolumeChange(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-[#35373c] rounded-lg appearance-none cursor-pointer accent-[#5865f2] mt-1"
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={[settings.monitorVolume]}
+              onValueChange={([val]) => onMonitorVolumeChange(val)}
             />
           </div>
         </div>
 
-        {/* Virtual Mic Broadcast Volume */}
-        <div className="flex items-center gap-2">
+        {/* Mic Broadcast SFX Mix */}
+        <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={onToggleBroadcastMute}
             title={
               settings.broadcastMuted
-                ? 'Unmute Soundboard into Virtual Mic'
-                : 'Mute Soundboard into Virtual Mic (Voice still passes through)'
+                ? 'Unmute Soundboard in Mic'
+                : 'Mute Soundboard in Mic (Voice keeps passing through)'
             }
-            className={`p-1.5 rounded-lg transition-colors ${
+            className={cn(
+              'p-1 rounded-md transition-colors shrink-0 cursor-pointer',
               settings.broadcastMuted
-                ? 'bg-[#f23f42]/15 text-[#f23f42] hover:bg-[#f23f42]/25'
-                : 'text-[#23a55a] hover:bg-[#35373c]'
-            }`}
+                ? 'bg-zinc-800 text-red-400'
+                : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+            )}
           >
-            <Mic className="w-4 h-4" />
+            <Mic className="w-3.5 h-3.5" />
           </button>
-          <div className="flex flex-col w-20 xl:w-24">
-            <div className="flex justify-between text-[10px] font-medium text-[#949ba4]">
-              <span>Mic SFX Mix</span>
-              <span>
-                {settings.broadcastMuted ? 'MUTED' : `${Math.round(settings.broadcastVolume * 100)}%`}
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="flex items-center justify-between text-[10px] text-zinc-400 leading-none">
+              <span className="truncate">Mic SFX</span>
+              <span className="font-mono text-zinc-200">
+                {settings.broadcastMuted ? 'MUTE' : `${Math.round(settings.broadcastVolume * 100)}%`}
               </span>
             </div>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={settings.broadcastVolume}
-              onChange={(e) => onBroadcastVolumeChange(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-[#35373c] rounded-lg appearance-none cursor-pointer accent-[#23a55a] mt-1"
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={[settings.broadcastVolume]}
+              onValueChange={([val]) => onBroadcastVolumeChange(val)}
             />
           </div>
         </div>
-      </div>
-
-      {/* Right: Actions */}
-      <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={onStopAll}
-          title={`Stop All Sounds (Panic Hotkey: ${settings.panicHotkey || 'None'})`}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-            isPlaying
-              ? 'bg-[#f23f42] hover:bg-[#d83538] text-white shadow-md shadow-[#f23f42]/25'
-              : 'bg-[#35373c] hover:bg-[#404249] text-[#dbdee1]'
-          }`}
-        >
-          <Square className="w-3.5 h-3.5 fill-current" />
-          <span>Stop All</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleOverlay}
-          title={`Toggle Mini Floating Overlay (${settings.overlayHotkey || 'Not Bound'})`}
-          className="p-2 rounded-lg bg-[#35373c] hover:bg-[#404249] text-[#dbdee1] hover:text-white transition-colors"
-        >
-          <Layers className="w-4 h-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          title="Audio Routing, Virtual Mic & Hotkey Settings"
-          className="p-2 rounded-lg bg-[#35373c] hover:bg-[#404249] text-[#dbdee1] hover:text-white transition-colors"
-        >
-          <Settings className="w-4 h-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={onAddSoundClick}
-          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-semibold shadow-md shadow-[#5865f2]/20 transition-all cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Sound</span>
-        </button>
       </div>
     </header>
   );

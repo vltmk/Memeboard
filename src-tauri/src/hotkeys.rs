@@ -10,7 +10,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Input::{
-    GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+    GetRawInputData, HRAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RAWKEYBOARD, RID_INPUT,
     RIDEV_INPUTSINK, RIM_TYPEKEYBOARD,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -444,6 +444,20 @@ thread_local! {
     static LOOP_CTX: std::cell::RefCell<Option<LoopContext>> = const { std::cell::RefCell::new(None) };
 }
 
+unsafe fn parse_raw_keyboard_bytes(buf: &[u8]) -> Option<RAWKEYBOARD> {
+    let header_size = std::mem::size_of::<RAWINPUTHEADER>();
+    let kb_size = std::mem::size_of::<RAWKEYBOARD>();
+    if buf.len() < header_size + kb_size {
+        return None;
+    }
+    let header = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<RAWINPUTHEADER>()) };
+    if header.dwType != RIM_TYPEKEYBOARD {
+        return None;
+    }
+    let kb = unsafe { std::ptr::read_unaligned(buf.as_ptr().add(header_size).cast::<RAWKEYBOARD>()) };
+    Some(kb)
+}
+
 unsafe extern "system" fn raw_input_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -479,10 +493,8 @@ unsafe extern "system" fn raw_input_wnd_proc(
                     &mut size,
                     header_size,
                 );
-                if read == size && (read as usize) >= std::mem::size_of::<RAWINPUT>() {
-                    let raw = std::ptr::read_unaligned(buf.as_ptr().cast::<RAWINPUT>());
-                    if raw.header.dwType == RIM_TYPEKEYBOARD {
-                        let kb = raw.data.keyboard;
+                if read != u32::MAX && read > 0 && (read as usize) <= buf.len() {
+                    if let Some(kb) = parse_raw_keyboard_bytes(&buf[..read as usize]) {
                         let is_break = (kb.Flags as u32 & 0x0001) != 0; // RI_KEY_BREAK
                         let is_e0 = (kb.Flags as u32 & 0x0002) != 0; // RI_KEY_E0
                         let is_down = |vk: u16| (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
@@ -516,8 +528,8 @@ unsafe extern "system" fn raw_input_wnd_proc(
                     }
                 }
             }
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
-        return 0;
     }
 
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -786,5 +798,36 @@ mod tests {
                 vkey: b'X' as u16,
             })
         );
+    }
+
+    #[test]
+    fn raw_input_keyboard_payload_decodes_from_40_byte_win64_packet() {
+        let header_size = std::mem::size_of::<RAWINPUTHEADER>();
+        let kb_size = std::mem::size_of::<RAWKEYBOARD>();
+        let packet_len = header_size + kb_size;
+        assert!(packet_len <= 40, "Win64 keyboard RAWINPUT is 40 bytes, got {packet_len}");
+
+        let mut buf = vec![0u8; packet_len];
+        let header = RAWINPUTHEADER {
+            dwType: RIM_TYPEKEYBOARD,
+            dwSize: packet_len as u32,
+            hDevice: std::ptr::null_mut(),
+            wParam: 0,
+        };
+        let kb = RAWKEYBOARD {
+            MakeCode: 0x1F,
+            Flags: 0,
+            Reserved: 0,
+            VKey: b'S' as u16,
+            Message: 0x0100,
+            ExtraInformation: 0,
+        };
+        unsafe {
+            std::ptr::write_unaligned(buf.as_mut_ptr().cast::<RAWINPUTHEADER>(), header);
+            std::ptr::write_unaligned(buf.as_mut_ptr().add(header_size).cast::<RAWKEYBOARD>(), kb);
+        }
+        let parsed = unsafe { parse_raw_keyboard_bytes(&buf) }.expect("40-byte packet must parse");
+        assert_eq!(parsed.VKey, b'S' as u16);
+        assert_eq!(parsed.MakeCode, 0x1F);
     }
 }

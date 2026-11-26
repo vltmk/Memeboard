@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Header } from './components/Header';
 import { SoundGrid } from './components/SoundGrid';
 import { SoundEditorModal } from './components/SoundEditorModal';
@@ -84,17 +85,19 @@ const MainApp: React.FC = () => {
   const [editingSound, setEditingSound] = useState<SoundItem | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [localPreviewId, setLocalPreviewId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const boardStateRef = useRef(boardState);
   boardStateRef.current = boardState;
   const volumeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
     setTimeout(() => {
       setToastMsg((prev) => (prev === msg ? null : prev));
-    }, 3600);
+    }, 3200);
   }, []);
 
   const refreshDevicesAndVirtualMic = useCallback(async () => {
@@ -111,7 +114,6 @@ const MainApp: React.FC = () => {
     }
   }, []);
 
-  // Load persisted state, audio devices, and virtual mic status on mount
   useEffect(() => {
     if (!isTauriEnvironment()) return;
 
@@ -145,15 +147,26 @@ const MainApp: React.FC = () => {
       }),
       listen('soundboard-panic', () => {
         setPlaybackStatus((prev) => ({ ...prev, playingSoundIds: [], activeClipCount: 0 }));
+        setLocalPreviewId(null);
+      }),
+      listen<string>('open-sound-editor', (event) => {
+        const target = boardStateRef.current.sounds.find((s) => s.id === event.payload);
+        if (target) {
+          setEditingSound(target);
+          const win = getCurrentWindow();
+          win.unminimize().catch(() => {});
+          win.show().catch(() => {});
+          win.setFocus().catch(() => {});
+        }
       }),
     ]);
 
     return () => {
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
       unlistenPromise.then((fns) => fns.forEach((fn) => fn())).catch(() => {});
     };
   }, []);
 
-  // Poll live playback & stream health every 140ms ONLY while main window is visible (not hidden in tray)
   useEffect(() => {
     if (!isTauriEnvironment()) return;
 
@@ -199,7 +212,6 @@ const MainApp: React.FC = () => {
     if (!isTauriEnvironment()) return;
     try {
       await api.saveSoundboardState(nextState);
-      // Reload canonical state so updated BS.1770 normalized gains reflect cleanly
       const canonical = await api.loadSoundboardState();
       setBoardState(canonical);
     } catch (e) {
@@ -212,7 +224,7 @@ const MainApp: React.FC = () => {
       const validPaths = paths.filter(hasSupportedAudioExt);
       if (validPaths.length === 0) {
         if (paths.length > 0) {
-          showToast('Unsupported file type. Use MP3, WAV, OGG, FLAC, M4A, or Opus.');
+          showToast('Unsupported format. Use MP3, WAV, OGG, FLAC, M4A, or Opus.');
         }
         return;
       }
@@ -236,14 +248,13 @@ const MainApp: React.FC = () => {
         showToast(
           imported.length === 1
             ? `Added "${imported[0].name}"`
-            : `Added ${imported.length} sound effects`
+            : `Added ${imported.length} clips`
         );
       }
     },
     [persistState, showToast]
   );
 
-  // Native Tauri v2 Drag-and-Drop listener (reliable OS paths in WebView2)
   useEffect(() => {
     if (!isTauriEnvironment()) return;
 
@@ -281,8 +292,31 @@ const MainApp: React.FC = () => {
         await handleImportPaths(picked);
       }
     } catch (e) {
-      showToast(`Could not open file dialog: ${e}`);
+      showToast(`Dialog error: ${e}`);
     }
+  };
+
+  const handleLocalPreview = (sound: SoundItem) => {
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    if (localPreviewId === sound.id) {
+      api.stopPreview(sound.id).catch(() => {});
+      setLocalPreviewId(null);
+      return;
+    }
+    if (localPreviewId) {
+      api.stopPreview(localPreviewId).catch(() => {});
+    }
+    const start = Math.max(0, sound.trimStart || 0);
+    const end = sound.trimEnd > start ? sound.trimEnd : sound.duration;
+    setLocalPreviewId(sound.id);
+    api.previewSound(sound.id, start, end, sound.volume, start).catch((e) => showToast(`${e}`));
+    const ms = Math.max(120, Math.ceil((end - start) * 1000) + 60);
+    previewTimerRef.current = setTimeout(() => {
+      setLocalPreviewId((cur) => (cur === sound.id ? null : cur));
+    }, ms);
   };
 
   const handleSaveSound = (updated: SoundItem) => {
@@ -321,7 +355,7 @@ const MainApp: React.FC = () => {
           newSettings.monitorDeviceId
         );
       } catch (e) {
-        showToast(`Device routing warning: ${e}`);
+        showToast(`Device warning: ${e}`);
       }
     }
 
@@ -340,7 +374,7 @@ const MainApp: React.FC = () => {
     } catch {
       // ignore
     }
-    showToast('Audio & hotkey settings applied');
+    showToast('Settings applied');
   };
 
   const scheduleHeaderSettingsSave = (nextSettings: AudioSettings) => {
@@ -372,9 +406,9 @@ const MainApp: React.FC = () => {
       const status = await api.installVirtualDriver();
       setVirtualMicStatus(status);
       await refreshDevicesAndVirtualMic();
-      showToast(status.virtualDeviceAttached ? 'Memeboard Virtual Mic is live!' : status.statusMessage);
+      showToast(status.virtualDeviceAttached ? 'Virtual Mic is live' : status.statusMessage);
     } catch (e) {
-      showToast(`Virtual mic setup failed: ${e}`);
+      showToast(`Setup failed: ${e}`);
     } finally {
       setIsInstallingDriver(false);
     }
@@ -388,18 +422,10 @@ const MainApp: React.FC = () => {
         ...prev,
         settings: { ...prev.settings, autoSwitchDefaultMic: enabled },
       }));
-      showToast(
-        enabled
-          ? 'Windows Default Mic switched to Memeboard Virtual Mic'
-          : 'Original physical microphone restored as Windows default'
-      );
+      showToast(enabled ? 'Default mic: Virtual Mic' : 'Restored physical mic');
     } catch (e) {
-      showToast(`Could not switch default mic: ${e}`);
+      showToast(`Could not switch mic: ${e}`);
     }
-  };
-
-  const handleRestoreOriginalMic = async () => {
-    await handleSetAutoSwitchMic(false);
   };
 
   const existingCategories = Array.from(
@@ -407,7 +433,7 @@ const MainApp: React.FC = () => {
   );
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#313338] text-[#f2f3f5] overflow-hidden select-none">
+    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-50 overflow-hidden select-none">
       <Header
         settings={boardState.settings}
         playbackStatus={playbackStatus}
@@ -417,8 +443,12 @@ const MainApp: React.FC = () => {
           refreshDevicesAndVirtualMic();
           setIsSettingsOpen(true);
         }}
-        onStopAll={() => api.stopAllSounds().catch(() => {})}
+        onStopAll={() => {
+          setLocalPreviewId(null);
+          api.stopAllSounds().catch(() => {});
+        }}
         onToggleOverlay={() => api.toggleOverlayWindow().catch(() => {})}
+        onDockBottomRight={() => api.dockMainWindow().catch(() => {})}
         onToggleMonitorMute={() =>
           scheduleHeaderSettingsSave({
             ...boardState.settings,
@@ -450,11 +480,13 @@ const MainApp: React.FC = () => {
       <SoundGrid
         sounds={boardState.sounds}
         playingIds={playbackStatus.playingSoundIds}
+        localPreviewId={localPreviewId}
         isDraggingFile={isDraggingFile}
         virtualMicStatus={virtualMicStatus}
         broadcastStreamActive={playbackStatus.broadcastStreamActive}
-        onPlaySound={(id) => api.playSound(id).catch((e) => showToast(`${e}`))}
-        onStopSound={(id) => api.stopSound(id).catch(() => {})}
+        onBroadcastSound={(s) => api.playSound(s.id).catch((e) => showToast(`${e}`))}
+        onStopBroadcast={(s) => api.stopSound(s.id).catch(() => {})}
+        onLocalPreview={handleLocalPreview}
         onEditSound={(sound) => setEditingSound(sound)}
         onAddSoundClick={handleAddSoundClick}
         onOpenSettings={() => {
@@ -483,12 +515,12 @@ const MainApp: React.FC = () => {
         onRefreshDevices={refreshDevicesAndVirtualMic}
         onInstallVirtualDriver={handleInstallVirtualDriver}
         onSetAutoSwitchMic={handleSetAutoSwitchMic}
-        onRestoreOriginalMic={handleRestoreOriginalMic}
+        onRestoreOriginalMic={() => handleSetAutoSwitchMic(false)}
         isInstallingDriver={isInstallingDriver}
       />
 
       {toastMsg && (
-        <div className="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl bg-[#1e1f22] border border-[#5865f2] text-xs font-semibold text-white shadow-2xl animate-in fade-in max-w-sm">
+        <div className="fixed bottom-9 right-3 z-50 px-3 py-1.5 rounded-md bg-zinc-900 border border-zinc-700 text-[11px] font-medium text-zinc-100 shadow-lg animate-in fade-in max-w-[300px]">
           {toastMsg}
         </div>
       )}

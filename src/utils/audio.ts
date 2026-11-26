@@ -48,9 +48,9 @@ export function drawWaveform(
   ctx.save();
   ctx.scale(dpr, dpr);
 
-  const playedColor = options?.playedColor || '#5865f2';
-  const unplayedColor = options?.unplayedColor || '#4e5058';
-  const dimmedColor = options?.dimmedColor || '#232428';
+  const playedColor = options?.playedColor || '#fafafa';
+  const unplayedColor = options?.unplayedColor || '#3f3f46';
+  const dimmedColor = options?.dimmedColor || '#18181b';
   const playheadColor = options?.playheadColor || '#ffffff';
 
   if (!peaks || peaks.length === 0) {
@@ -96,12 +96,12 @@ export function drawWaveform(
 
   // Subtle highlight tint inside active trimmed window
   if (endX > startX) {
-    ctx.fillStyle = 'rgba(88, 101, 242, 0.08)';
+    ctx.fillStyle = 'rgba(250, 250, 250, 0.06)';
     ctx.fillRect(startX, 0, endX - startX, height);
   }
 
-  const startHandleColor = options?.trimHandleColor || '#23a55a';
-  const endHandleColor = options?.trimHandleColor || '#f0b232';
+  const startHandleColor = options?.trimHandleColor || '#fafafa';
+  const endHandleColor = options?.trimHandleColor || '#a1a1aa';
 
   const drawHandle = (x: number, color: string, alignLeft: boolean) => {
     ctx.strokeStyle = color;

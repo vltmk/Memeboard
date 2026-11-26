@@ -13,24 +13,24 @@
     "windows": [
       {
         "label": "main",
-        "title": "Memeboard - Soundboard & Virtual Mic",
-        "width": 1060,
-        "height": 740,
-        "minWidth": 860,
-        "minHeight": 560,
-        "center": true
+        "title": "Memeboard",
+        "width": 390,
+        "height": 640,
+        "minWidth": 340,
+        "minHeight": 480
       },
       {
         "label": "overlay",
         "title": "Memeboard Overlay",
-        "width": 420,
-        "height": 480,
+        "width": 350,
+        "height": 340,
         "resizable": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true,
+        "focusable": false,
         "url": "index.html?overlay=true"
       }
     ],
